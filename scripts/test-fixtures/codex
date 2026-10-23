@@ -1,0 +1,36 @@
+#!/usr/bin/python3
+"""Minimal offline Codex process for the default Go test suite.
+
+No model, credentials, tools or external service are used. The exec backend
+deliberately fails; the app-server backend completes a synthetic empty turn.
+"""
+
+import json
+import sys
+
+
+def emit(payload):
+    print(json.dumps(payload), flush=True)
+
+
+if "--version" in sys.argv[1:]:
+    print("codex 0.103.0 (offline SDK test fixture)")
+    sys.exit(0)
+
+if len(sys.argv) < 2 or sys.argv[1] != "app-server":
+    print("exec backend disabled by offline SDK test fixture", file=sys.stderr)
+    sys.exit(1)
+
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    method = request.get("method")
+    result = {}
+    if method in ("thread/start", "thread/resume"):
+        result = {"thread": {"id": "offline-test-thread"}, "model": "offline-fixture"}
+    elif method == "turn/start":
+        result = {"turn": {"id": "offline-test-turn"}}
+    emit({"jsonrpc": "2.0", "id": request["id"], "result": result})
+    if method == "turn/start":
+        emit({"jsonrpc": "2.0", "method": "turn/completed", "params": {"result": "offline fixture", "isError": False}})
