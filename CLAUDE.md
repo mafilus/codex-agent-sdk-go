@@ -18,6 +18,9 @@ Shared repository instructions for coding agents.
 - Stateful sessions: `NewClient()` + `Client`
 - Lifecycle helper: `WithClient(ctx, fn, opts...)`
 - Session metadata: `StatSession(ctx, sessionID, opts...)`
+- Optional process lifecycle: `Client.(ProcessLifecycleProvider)` after Start;
+  SDK owns one app-server --stdio process and one OS Wait. See README.md and
+  the public ProcessLifecycle API documentation.
 - Cancellable channel input: `MessagesFromChannelContext(ctx, input)`; cancel
   the producer context when leaving a query early.
 

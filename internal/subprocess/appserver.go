@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -23,31 +25,43 @@ type AppServerTransport struct {
 	log  *slog.Logger
 	opts *config.Options
 
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout *bufio.Scanner
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	stdout     *bufio.Scanner
+	stdoutRead io.ReadCloser
 
-	mu        sync.Mutex
-	nextID    int64
-	ready     bool
-	closing   bool
-	pending   map[int64]chan *RPCResponse
-	notifyCh  chan *RPCNotification
-	requestCh chan *RPCIncomingRequest
-	readDone  chan struct{}
-	stop      chan struct{}
+	mu             sync.Mutex
+	writeMu        sync.Mutex
+	nextID         int64
+	ready          bool
+	closing        bool
+	pending        map[int64]chan *RPCResponse
+	notifyCh       chan *RPCNotification
+	requestCh      chan *RPCIncomingRequest
+	readDone       chan struct{}
+	stop           chan struct{}
+	processStarted bool
+	processDone    chan struct{}
+	processResult  config.ProcessResult
+	killRequested  bool
+	shutdownOnce   sync.Once
+	shutdownDone   chan struct{}
+	shutdownErr    error
+	delivery       sync.WaitGroup
 }
 
 // NewAppServerTransport creates a new app server transport.
 func NewAppServerTransport(log *slog.Logger, opts *config.Options) *AppServerTransport {
 	return &AppServerTransport{
-		log:       log.With(slog.String("component", "appserver")),
-		opts:      opts,
-		pending:   make(map[int64]chan *RPCResponse, 4),
-		notifyCh:  make(chan *RPCNotification, 128),
-		requestCh: make(chan *RPCIncomingRequest, 32),
-		readDone:  make(chan struct{}),
-		stop:      make(chan struct{}),
+		log:          log.With(slog.String("component", "appserver")),
+		opts:         opts,
+		pending:      make(map[int64]chan *RPCResponse, 4),
+		notifyCh:     make(chan *RPCNotification, 128),
+		requestCh:    make(chan *RPCIncomingRequest, 32),
+		readDone:     make(chan struct{}),
+		stop:         make(chan struct{}),
+		processDone:  make(chan struct{}),
+		shutdownDone: make(chan struct{}),
 	}
 }
 
@@ -72,6 +86,11 @@ func (t *AppServerTransport) Start(ctx context.Context) error {
 		slog.Any("args", args),
 	)
 
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closing || t.processStarted {
+		return fmt.Errorf("transport is single-use")
+	}
 	t.cmd = exec.CommandContext(ctx, path, args...)
 	t.cmd.Env = cli.BuildEnvironment(t.opts)
 
@@ -84,10 +103,14 @@ func (t *AppServerTransport) Start(ctx context.Context) error {
 		return fmt.Errorf("creating stdin pipe: %w", err)
 	}
 
-	stdoutPipe, err := t.cmd.StdoutPipe()
+	// Own stdout separately: Cmd.Wait must not close unread terminal output.
+	stdoutPipe, stdoutWriter, err := os.Pipe()
 	if err != nil {
-		return fmt.Errorf("creating stdout pipe: %w", err)
+		closeErr := t.stdin.Close()
+		return errors.Join(fmt.Errorf("creating stdout pipe: %w", err), closeErr)
 	}
+	t.cmd.Stdout = stdoutWriter
+	t.stdoutRead = stdoutPipe
 
 	t.stdout = bufio.NewScanner(stdoutPipe)
 	t.stdout.Buffer(
@@ -96,24 +119,39 @@ func (t *AppServerTransport) Start(ctx context.Context) error {
 	)
 
 	if err := t.cmd.Start(); err != nil {
-		return fmt.Errorf("starting codex app-server: %w", err)
+		return errors.Join(fmt.Errorf("starting codex app-server: %w", err), t.stdin.Close(), stdoutPipe.Close(), stdoutWriter.Close())
+	}
+	t.processStarted = true
+	if err := stdoutWriter.Close(); err != nil {
+		t.log.Warn("close parent stdout writer", "error", err)
 	}
 
 	t.log.InfoContext(ctx, "codex app-server started",
 		slog.Int("pid", t.cmd.Process.Pid),
 	)
 
-	go t.readLoop()
+	go func() {
+		defer func() {
+			if err := stdoutPipe.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+				t.log.Warn("close process stdout", "error", err)
+			}
+		}()
+		t.readLoop()
+	}()
+	go t.waitProcess(ctx, t.cmd)
+	t.mu.Unlock()
 
 	if err := t.initialize(ctx); err != nil {
-		_ = t.Close()
-
-		return fmt.Errorf("initialize handshake: %w", err)
+		closeErr := t.Close()
+		t.mu.Lock()
+		return errors.Join(fmt.Errorf("initialize handshake: %w", err), closeErr)
 	}
 
 	t.mu.Lock()
+	if t.closing {
+		return fmt.Errorf("transport closed during initialization")
+	}
 	t.ready = true
-	t.mu.Unlock()
 
 	return nil
 }
@@ -246,36 +284,17 @@ func (t *AppServerTransport) IsReady() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	return t.ready
+	select {
+	case <-t.processDone:
+		return false
+	default:
+		return t.ready && !t.closing
+	}
 }
 
 // Close terminates the app server subprocess.
 func (t *AppServerTransport) Close() error {
-	t.mu.Lock()
-	if t.closing {
-		t.mu.Unlock()
-
-		return nil
-	}
-
-	t.closing = true
-	close(t.stop)
-	t.mu.Unlock()
-
-	if t.stdin != nil {
-		_ = t.stdin.Close()
-	}
-
-	if t.cmd != nil && t.cmd.Process != nil {
-		t.log.Debug("killing codex app-server process",
-			slog.Int("pid", t.cmd.Process.Pid),
-		)
-
-		_ = t.cmd.Process.Kill()
-		_ = t.cmd.Wait()
-	}
-
-	return nil
+	return t.Stop(context.Background())
 }
 
 // writeMessage marshals and writes a JSON-RPC message to stdin.
@@ -285,16 +304,19 @@ func (t *AppServerTransport) writeMessage(msg any) error {
 		return fmt.Errorf("marshaling message: %w", err)
 	}
 
+	t.writeMu.Lock()
+	defer t.writeMu.Unlock()
 	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if t.closing {
+	closing := t.closing
+	stdin := t.stdin
+	t.mu.Unlock()
+	if closing {
 		return fmt.Errorf("transport is closing")
 	}
 
 	data = append(data, '\n')
 
-	if _, err := t.stdin.Write(data); err != nil {
+	if _, err := stdin.Write(data); err != nil {
 		return fmt.Errorf("writing to stdin: %w", err)
 	}
 
@@ -311,8 +333,9 @@ func (t *AppServerTransport) readLoop() {
 
 	// Keep reading RPC responses even while an event consumer is slow. Blocking
 	// stdout on event delivery can otherwise deadlock a pending RPC handshake.
-	go forwardRPCEvents(notifications, t.notifyCh, t.stop)
-	go forwardRPCEvents(requests, t.requestCh, t.stop)
+	t.delivery.Add(2)
+	go func() { defer t.delivery.Done(); forwardRPCEvents(notifications, t.notifyCh, t.stop) }()
+	go func() { defer t.delivery.Done(); forwardRPCEvents(requests, t.requestCh, t.stop) }()
 
 	for t.stdout.Scan() {
 		line := t.stdout.Bytes()

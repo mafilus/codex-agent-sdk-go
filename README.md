@@ -40,7 +40,52 @@ See [LOCAL-FORK.md](LOCAL-FORK.md) for provenance and local fixes.
 Run `make test-offline` for the full default test suite with a synthetic Codex
 process, Python 3 and the race detector. This does not use an external backend.
 
-### Streaming lifecycle
+### SDK-owned app-server process
+
+Stateful clients launch the effective `codex app-server --stdio` process. The
+SDK owns its protocol pipes and is the only caller of OS Wait, including on
+spontaneous exit. There is no second supervisory Codex process.
+
+Process observation is optional, leaving the `Client` interface and custom
+transport implementations unchanged:
+
+```go
+provider, ok := client.(codexsdk.ProcessLifecycleProvider)
+if !ok {
+    return codexsdk.ErrProcessUnsupported
+}
+process, err := provider.ProcessLifecycle() // after client.Start
+if err != nil {
+    return err
+}
+result, err := process.Wait(ctx)
+if err != nil { // this observer's context, not the process exit code
+    return err
+}
+// Inspect result.ExitCode, Signaled, Signal, WaitErr and ContextErr.
+// process.Stop(ctx) requests shutdown and joins the process/reader.
+```
+
+Before process creation, observation returns `ErrProcessNotStarted`, including
+failed discovery/spawn. Failed initialization after spawn still exposes the
+terminated process. Non-process custom transports return `ErrProcessUnsupported`.
+`Done` signals OS termination; `ReaderDone` signals stdout decoding completion,
+not delivery of all queued events or a successful model turn. Natural exit
+preserves buffered terminal events. Explicit Stop/Close may discard pending
+events and must not be substituted for consuming a successful turn result.
+
+`Wait(ctx)` returns an immutable process result (including nonzero exit) without
+changing the process. Canceling one waiter does not cancel other observers.
+`Stop(ctx)` initiates one shared shutdown, then bounds that caller's join;
+shutdown continues if the waiter cancels. Do not assume EOF alone stops Codex.
+Concurrent `Close` calls join the same cleanup and return its stable error.
+Close has no caller deadline; use the optional process Stop capability for a
+bounded process/reader join, then Close the client to finish client resources.
+`StopRequested` records an accepted explicit kill request, not proof that it
+caused an earlier spontaneous exit. `ContextErr` is observed at OS Wait, not a
+causal attribution. Results contain no argv, environment, stderr or credentials.
+
+### Streaming input ownership
 
 Use `MessagesFromChannelContext(ctx, input)` for input channels that may remain
 open and idle, and cancel that context when leaving a query early. `QueryStream`

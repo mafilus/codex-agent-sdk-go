@@ -14,6 +14,10 @@ The SDK supports two built-in execution backends:
   - Routes to `app-server` when required by selected options.
 - `QueryStream(...)` uses app-server semantics unless `WithTransport(...)` injects custom transport.
 - `Client.Start(...)` uses app-server transport semantics.
+- Built-in app-server runs explicitly with `--stdio`. The SDK owns its process;
+  optional process observation is separate from protocol reader/turn completion.
+  See README.md and the public ProcessLifecycle API documentation; do not
+  reintroduce a second keepalive process.
 
 Capability selection/validation logic lives in:
 

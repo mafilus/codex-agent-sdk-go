@@ -174,7 +174,7 @@ func BuildExecArgs(prompt string, options *config.Options) []string {
 
 // BuildAppServerArgs constructs the CLI argument list for `codex app-server`.
 func BuildAppServerArgs(options *config.Options) []string {
-	args := []string{"app-server"}
+	args := []string{"app-server", "--stdio"}
 
 	if options != nil {
 		args = append(args, serializeMCPServerConfigArgs(options.MCPServers)...)

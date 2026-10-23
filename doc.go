@@ -8,6 +8,15 @@
 // MessagesFromChannelContext with the query context, and cancel it on early
 // exit. Custom input iterators must release their own blocking operations.
 //
+// Stateful clients own the effective app-server --stdio process. The optional
+// ProcessLifecycleProvider capability exposes OS termination separately from
+// stdout reader completion and model results, without extending Client or
+// breaking custom transports. Wait observes an immutable process result;
+// Stop uses a caller context to bound joining shared shutdown. Canceling an
+// observer does not cancel other waiters. Natural exit drains queued output;
+// explicit Stop/Close may discard pending events. Close remains unbounded by
+// caller context. See ProcessLifecycleProvider for optional capability discovery.
+//
 // # Basic Usage
 //
 // For simple, one-shot queries, use the Query function:

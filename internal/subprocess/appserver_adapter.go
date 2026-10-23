@@ -66,7 +66,9 @@ type AppServerAdapter struct {
 	// for server-to-client requests (hooks/MCP).
 	pendingRPCRequests map[string]int64
 
-	wg sync.WaitGroup
+	wg        sync.WaitGroup
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // Compile-time verification that AppServerAdapter implements Transport.
@@ -138,17 +140,12 @@ func (a *AppServerAdapter) SendMessage(ctx context.Context, data []byte) error {
 
 // Close shuts down the adapter and inner transport.
 func (a *AppServerAdapter) Close() error {
-	select {
-	case <-a.done:
-		return nil
-	default:
+	a.closeOnce.Do(func() {
 		close(a.done)
-	}
-
-	err := a.inner.Close()
-	a.wg.Wait()
-
-	return err
+		a.closeErr = a.inner.Close()
+		a.wg.Wait()
+	})
+	return a.closeErr
 }
 
 // IsReady delegates to the inner transport.

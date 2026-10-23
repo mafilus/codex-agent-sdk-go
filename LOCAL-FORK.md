@@ -23,6 +23,10 @@ Corrections:
   otherwise unblock themselves to release their goroutine.
 - Preserve the cancellation error in `Query` and `QueryStream` when controller
   shutdown races with cancellation during the caller's message callback.
+- Own and reap the effective `app-server --stdio` process, with optional
+  process/reader observation and caller-bounded shared shutdown. Keep one OS
+  Wait, preserve natural buffered output and distinguish process exit from a
+  completed model turn.
 
 Regression coverage uses local synthetic transports, with no external Codex
 backend. Runtime and Live integration are separate validation levels.
@@ -31,16 +35,3 @@ Run `make test-offline` for the full default suite with the race detector and
 the Python 3 fixture in `scripts/test-fixtures/codex`. The fixture synthesizes
 the app-server initialize/thread/turn responses; it does not run a model or
 prove compatibility with a real Codex backend.
-
-Validation of the local corrections:
-
-- Full default suite with `make test-offline`: passed, including `-race`, shuffle
-  and the synthetic Codex process.
-- `go vet ./...` and `go mod verify`: passed.
-- Two independent agent reviews; the stream review found the cancellation race
-  above, which was patched and counter-reviewed without a remaining finding.
-- `make lint` could not run because `golangci-lint` is not installed.
-
-The event queues grow with backlog. Arbitrary input iterators that ignore their
-context cannot be forcibly stopped; cancel cooperative producer contexts on
-early exit. No real Codex backend or external Live scenario was run.

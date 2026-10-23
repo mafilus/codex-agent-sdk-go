@@ -52,6 +52,7 @@ type Client struct {
 	connected bool
 	closed    bool
 	closeOnce sync.Once
+	closeErr  error
 }
 
 // New creates a new interactive client.
@@ -126,11 +127,10 @@ func (c *Client) initializeCore(ctx context.Context, options *config.Options) er
 		transport = subprocess.NewAppServerAdapter(c.log, options)
 	}
 
+	c.transport = transport
 	if err := transport.Start(ctx); err != nil {
 		return fmt.Errorf("start transport: %w", err)
 	}
-
-	c.transport = transport
 
 	c.controller = protocol.NewController(c.log, transport)
 	if err := c.controller.Start(ctx); err != nil {
@@ -615,7 +615,6 @@ func (c *Client) GetServerInfo() map[string]any {
 
 // Close terminates the session and cleans up resources.
 func (c *Client) Close() error {
-	var closeErr error
 
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
@@ -637,17 +636,31 @@ func (c *Client) Close() error {
 		}
 
 		if c.transport != nil {
-			closeErr = c.transport.Close()
+			c.closeErr = c.transport.Close()
 		}
 
 		if c.eg != nil {
-			if err := c.eg.Wait(); err != nil && closeErr == nil {
-				closeErr = err
+			if err := c.eg.Wait(); err != nil && c.closeErr == nil {
+				c.closeErr = err
 			}
 		}
 
 		c.log.Info("client closed")
 	})
 
-	return closeErr
+	return c.closeErr
+}
+
+// ProcessLifecycle exposes an optional capability without extending Transport.
+func (c *Client) ProcessLifecycle() (config.ProcessLifecycle, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.transport == nil {
+		return nil, config.ErrProcessNotStarted
+	}
+	provider, ok := c.transport.(config.ProcessLifecycleProvider)
+	if !ok {
+		return nil, config.ErrProcessUnsupported
+	}
+	return provider.ProcessLifecycle()
 }

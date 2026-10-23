@@ -562,7 +562,7 @@ func TestBuildAppServerArgs(t *testing.T) {
 	options := &config.Options{}
 	args := BuildAppServerArgs(options)
 
-	require.Equal(t, []string{"app-server"}, args)
+	require.Equal(t, []string{"app-server", "--stdio"}, args)
 }
 
 // TestBuildAppServerArgs_IgnoresNonMCPOptions tests that app-server ignores non-MCP options.
@@ -575,8 +575,8 @@ func TestBuildAppServerArgs_IgnoresNonMCPOptions(t *testing.T) {
 
 	args := BuildAppServerArgs(options)
 
-	// Without MCP servers, app server args should be just ["app-server"]
-	require.Equal(t, []string{"app-server"}, args)
+	// Explicit stdio does not require a terminal.
+	require.Equal(t, []string{"app-server", "--stdio"}, args)
 }
 
 // TestBuildAppServerArgs_WithMCPServers tests that MCP servers are serialized as -c flags.
@@ -612,7 +612,7 @@ func TestBuildAppServerArgs_WithMCPServersSDKSkipped(t *testing.T) {
 
 	args := BuildAppServerArgs(options)
 
-	require.Equal(t, []string{"app-server"}, args)
+	require.Equal(t, []string{"app-server", "--stdio"}, args)
 }
 
 // TestBuildEnvironment_Basic tests basic environment variable setup.
