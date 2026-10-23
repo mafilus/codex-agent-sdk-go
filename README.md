@@ -1,1 +1,0 @@
-# codex-agent-sdk-go
