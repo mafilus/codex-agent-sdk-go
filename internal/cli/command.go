@@ -100,7 +100,7 @@ func BuildExecArgs(prompt string, options *config.Options) []string {
 	args := []string{
 		"exec",
 		"--json",
-		"--full-auto",
+		"-c", `approval_policy="on-request"`,
 		"--ephemeral",
 		"--skip-git-repo-check",
 	}
@@ -113,6 +113,9 @@ func BuildExecArgs(prompt string, options *config.Options) []string {
 	sandbox := options.Sandbox
 	if sandbox == "" {
 		sandbox = mapPermissionToSandbox(options.PermissionMode)
+	}
+	if sandbox == "" {
+		sandbox = "workspace-write"
 	}
 
 	if sandbox != "" {

@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"slices"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -28,11 +30,17 @@ type Session struct {
 	controller *Controller
 	options    *config.Options
 
-	sdkMcpServers   map[string]mcp.ServerInstance
-	sdkDynamicTools map[string]*config.DynamicTool
+	sdkMcpServers      map[string]mcp.ServerInstance
+	sdkDynamicTools    map[string]*config.DynamicTool
+	sdkMcpToolBindings map[string]mcpToolBinding
 
 	initMu               sync.RWMutex
 	initializationResult map[string]any
+}
+
+type mcpToolBinding struct {
+	server string
+	tool   string
 }
 
 // NewSession creates a new Session for protocol handling.
@@ -200,7 +208,42 @@ func (s *Session) buildInitializePayload() map[string]any {
 		payload["mcpServers"] = servers
 	}
 
-	if dynamicTools := serializeDynamicTools(s.options.SDKTools); len(dynamicTools) > 0 {
+	dynamicTools := serializeDynamicTools(s.options.SDKTools)
+	s.sdkMcpToolBindings = make(map[string]mcpToolBinding)
+	names := make(map[string]bool, len(dynamicTools))
+	for _, tool := range dynamicTools {
+		name, _ := tool["name"].(string)
+		names[name] = true
+	}
+	// In-process MCP servers cannot be launched by Codex. Advertise their tools
+	// through the app-server dynamic-tool API. Codex reserves the mcp__ prefix,
+	// so keep an exact binding from each unique wire alias to its MCP handler.
+	for _, serverName := range slices.Sorted(maps.Keys(s.sdkMcpServers)) {
+		tools := s.sdkMcpServers[serverName].ListTools()
+		sort.Slice(tools, func(i, j int) bool {
+			return fmt.Sprint(tools[i]["name"]) < fmt.Sprint(tools[j]["name"])
+		})
+		for _, tool := range tools {
+			toolName, _ := tool["name"].(string)
+			base := "sdk_mcp__" + serverName + "__" + toolName
+			name := base
+			for suffix := 2; names[name]; suffix++ {
+				name = base + "_" + strconv.Itoa(suffix)
+			}
+			schema := tool["inputSchema"]
+			if schema == nil {
+				schema = map[string]any{"type": "object", "properties": map[string]any{}}
+			}
+			dynamicTools = append(dynamicTools, map[string]any{
+				"name":        name,
+				"description": tool["description"],
+				"inputSchema": schema,
+			})
+			names[name] = true
+			s.sdkMcpToolBindings[name] = mcpToolBinding{server: serverName, tool: toolName}
+		}
+	}
+	if len(dynamicTools) > 0 {
 		payload["dynamicTools"] = dynamicTools
 	}
 
@@ -435,7 +478,12 @@ func (s *Session) HandleDynamicToolCall(
 	}
 
 	// Fall back to MCP server lookup for mcp__<server>__<tool> names.
-	serverName, toolName, err := parseMCPToolName(toolFullName)
+	binding, bound := s.sdkMcpToolBindings[toolFullName]
+	serverName, toolName := binding.server, binding.tool
+	var err error
+	if !bound {
+		serverName, toolName, err = parseMCPToolName(toolFullName)
+	}
 	if err != nil {
 		//nolint:nilerr // Error is encoded in the protocol response
 		return map[string]any{
@@ -458,6 +506,26 @@ func (s *Session) HandleDynamicToolCall(
 		}, nil
 	}
 
+	if s.options != nil && s.options.CanUseTool != nil {
+		publicName := "mcp__" + serverName + "__" + toolName
+		decision, err := s.options.CanUseTool(ctx, publicName, arguments, &permission.Context{})
+		if err != nil {
+			return nil, err
+		}
+		switch d := decision.(type) {
+		case *permission.ResultAllow:
+			if d.UpdatedInput != nil {
+				arguments = d.UpdatedInput
+			}
+		case *permission.ResultDeny:
+			return map[string]any{
+				"success":      false,
+				"contentItems": []map[string]any{{"type": "inputText", "text": d.Message}},
+			}, nil
+		default:
+			return nil, fmt.Errorf("tool permission callback returned invalid result %T", decision)
+		}
+	}
 	result, callErr := server.CallTool(ctx, toolName, arguments)
 	if callErr != nil {
 		//nolint:nilerr // Error is encoded in the protocol response

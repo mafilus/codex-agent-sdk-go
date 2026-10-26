@@ -2,15 +2,133 @@ package protocol
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"testing"
 
 	"github.com/mafilus/codex-agent-sdk-go/internal/config"
 	"github.com/mafilus/codex-agent-sdk-go/internal/mcp"
+	"github.com/mafilus/codex-agent-sdk-go/internal/permission"
 	"github.com/mafilus/codex-agent-sdk-go/internal/userinput"
+	mcpproto "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSession_MCPToolsAdvertisedAndDispatched(t *testing.T) {
+	server := mcp.NewSDKServer("probe", "1.0.0")
+	var received map[string]any
+	server.AddTool(&mcpproto.Tool{
+		Name: "echo", Description: "Echo a message",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(_ context.Context, req *mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+		var err error
+		received, err = mcp.ParseArguments(req)
+		return mcp.TextResult("echoed"), err
+	})
+	session := NewSession(slog.Default(), nil, &config.Options{
+		MCPServers: map[string]mcp.ServerConfig{
+			"probe": &mcp.SdkServerConfig{Instance: server},
+		},
+		SDKTools: []*config.DynamicTool{{Name: "plain", Description: "Plain tool"}},
+	})
+	session.RegisterMCPServers()
+	tools := session.buildInitializePayload()["dynamicTools"].([]map[string]any)
+	require.Len(t, tools, 2)
+	require.Equal(t, "plain", tools[0]["name"])
+	require.Equal(t, "sdk_mcp__probe__echo", tools[1]["name"])
+	require.Equal(t, "Echo a message", tools[1]["description"])
+	require.Equal(t, map[string]any{"type": "object"}, tools[1]["inputSchema"])
+
+	result, err := session.HandleDynamicToolCall(context.Background(), &ControlRequest{
+		Request: map[string]any{
+			"tool": tools[1]["name"], "arguments": map[string]any{"message": "hello"},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"message": "hello"}, received)
+	require.Equal(t, true, result["success"])
+	require.Equal(t, "echoed", result["contentItems"].([]map[string]any)[0]["text"])
+
+	// A colliding explicit tool keeps its name; the MCP alias stays unique.
+	session.options.SDKTools = append(session.options.SDKTools, &config.DynamicTool{
+		Name: "sdk_mcp__probe__echo", Description: "Explicit override",
+	})
+	tools = session.buildInitializePayload()["dynamicTools"].([]map[string]any)
+	require.Len(t, tools, 3)
+	require.Equal(t, "Explicit override", tools[1]["description"])
+	require.Equal(t, "sdk_mcp__probe__echo_2", tools[2]["name"])
+}
+
+func TestSession_MCPAliasesAndEmptySchema(t *testing.T) {
+	opts := &config.Options{MCPServers: map[string]mcp.ServerConfig{}}
+	for serverName, toolName := range map[string]string{"a": "b__c", "a__b": "c"} {
+		server := mcp.NewSDKServer(serverName, "1.0.0")
+		server.AddTool(&mcpproto.Tool{Name: toolName}, func(_ context.Context, _ *mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+			return mcp.TextResult(serverName), nil
+		})
+		opts.MCPServers[serverName] = &mcp.SdkServerConfig{Instance: server}
+	}
+	session := NewSession(slog.Default(), nil, opts)
+	session.RegisterMCPServers()
+	tools := session.buildInitializePayload()["dynamicTools"].([]map[string]any)
+	require.Len(t, tools, 2)
+	require.NotEqual(t, tools[0]["name"], tools[1]["name"])
+	for i, expected := range []string{"a", "a__b"} {
+		require.Equal(t, map[string]any{"type": "object", "properties": map[string]any{}}, tools[i]["inputSchema"])
+		result, err := session.HandleDynamicToolCall(context.Background(), &ControlRequest{
+			Request: map[string]any{"tool": tools[i]["name"], "arguments": map[string]any{}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, true, result["success"])
+		require.Equal(t, expected, result["contentItems"].([]map[string]any)[0]["text"])
+	}
+}
+
+func TestSession_MCPToolPermissions(t *testing.T) {
+	for _, denied := range []bool{false, true} {
+		for _, alias := range []bool{false, true} {
+			t.Run(fmt.Sprintf("denied=%t/alias=%t", denied, alias), func(t *testing.T) {
+				server := mcp.NewSDKServer("probe", "1.0.0")
+				calls := 0
+				server.AddTool(&mcpproto.Tool{Name: "echo"}, func(_ context.Context, req *mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+					calls++
+					args, err := mcp.ParseArguments(req)
+					require.Equal(t, "updated", args["message"])
+					return mcp.TextResult("ok"), err
+				})
+				opts := &config.Options{
+					MCPServers: map[string]mcp.ServerConfig{"probe": &mcp.SdkServerConfig{Instance: server}},
+					CanUseTool: func(_ context.Context, name string, _ map[string]any, _ *permission.Context) (permission.Result, error) {
+						require.Equal(t, "mcp__probe__echo", name)
+						return &permission.ResultAllow{UpdatedInput: map[string]any{"message": "updated"}}, nil
+					},
+				}
+				if denied {
+					opts.DisallowedTools = []string{"mcp__probe__echo"}
+				}
+				require.NoError(t, config.ConfigureToolPermissionPolicy(opts))
+				session := NewSession(slog.Default(), nil, opts)
+				session.RegisterMCPServers()
+				tools := session.buildInitializePayload()["dynamicTools"].([]map[string]any)
+				name := any("mcp__probe__echo")
+				if alias {
+					name = tools[0]["name"]
+				}
+				result, err := session.HandleDynamicToolCall(context.Background(), &ControlRequest{
+					Request: map[string]any{"tool": name, "arguments": map[string]any{"message": "original"}},
+				})
+				require.NoError(t, err)
+				require.Equal(t, !denied, result["success"])
+				if denied {
+					require.Zero(t, calls)
+				} else {
+					require.Equal(t, 1, calls)
+				}
+			})
+		}
+	}
+}
 
 // TestSession_NeedsInitialization_Empty tests that NeedsInitialization returns false
 // when no CanUseTool or MCP servers are configured.

@@ -58,7 +58,8 @@ func TestBuildExecArgs_Basic(t *testing.T) {
 
 	require.Contains(t, args, "exec")
 	require.Contains(t, args, "--json")
-	require.Contains(t, args, "--full-auto")
+	require.NotContains(t, args, "--full-auto")
+	require.Contains(t, args, `approval_policy="on-request"`)
 	require.Contains(t, args, "--ephemeral")
 	require.Contains(t, args, "--skip-git-repo-check")
 	require.Contains(t, args, "hello")
@@ -149,14 +150,16 @@ func TestBuildExecArgs_WithPermissionModeMapping(t *testing.T) {
 			wantFlag:       true,
 		},
 		{
-			name:           "default maps to empty",
+			name:           "default maps to workspace-write",
 			permissionMode: "default",
-			wantFlag:       false,
+			wantSandbox:    "workspace-write",
+			wantFlag:       true,
 		},
 		{
-			name:           "empty maps to empty",
+			name:           "empty maps to workspace-write",
 			permissionMode: "",
-			wantFlag:       false,
+			wantSandbox:    "workspace-write",
+			wantFlag:       true,
 		},
 	}
 
@@ -306,7 +309,7 @@ func TestBuildExecArgs_WithConfig(t *testing.T) {
 		}
 	}
 
-	require.Equal(t, 2, configCount)
+	require.Equal(t, 3, configCount) // Includes the default approval policy.
 	// Config keys are sorted for deterministic ordering
 	require.Contains(t, args, "key1=value1")
 	require.Contains(t, args, "key2=value2")
@@ -356,16 +359,17 @@ func TestBuildExecArgs_WithSingleConfig(t *testing.T) {
 		}
 	}
 
-	require.Equal(t, 1, configCount)
+	require.Equal(t, 2, configCount) // Includes the default approval policy.
 	require.Contains(t, args, "only-key=only-value")
 }
 
-// TestBuildExecArgs_WithNoConfig tests that no -c flag appears when config is empty.
+// TestBuildExecArgs_WithNoConfig keeps the default approval policy without user config.
 func TestBuildExecArgs_WithNoConfig(t *testing.T) {
 	options := &config.Options{}
 	args := BuildExecArgs("test", options)
 
-	require.NotContains(t, args, "-c")
+	require.Contains(t, args, "-c")
+	require.Contains(t, args, `approval_policy="on-request"`)
 }
 
 // TestBuildExecArgs_WithOutputSchema tests output schema option.
@@ -538,15 +542,16 @@ func TestBuildExecArgs_PermissionModeWithoutSandbox(t *testing.T) {
 	require.Contains(t, args, "workspace-write")
 }
 
-// TestBuildExecArgs_NoSandboxNoPermission tests that no -s flag when both are empty.
+// TestBuildExecArgs_NoSandboxNoPermission preserves the default workspace-write sandbox.
 func TestBuildExecArgs_NoSandboxNoPermission(t *testing.T) {
 	options := &config.Options{}
 	args := BuildExecArgs("test", options)
 
-	require.NotContains(t, args, "-s")
+	require.Contains(t, args, "-s")
+	require.Contains(t, args, "workspace-write")
 }
 
-// TestBuildExecArgs_UnknownPermissionMode tests that unknown permission modes produce no sandbox.
+// TestBuildExecArgs_UnknownPermissionMode falls back to workspace-write.
 func TestBuildExecArgs_UnknownPermissionMode(t *testing.T) {
 	options := &config.Options{
 		PermissionMode: "unknownMode",
@@ -554,7 +559,8 @@ func TestBuildExecArgs_UnknownPermissionMode(t *testing.T) {
 
 	args := BuildExecArgs("test", options)
 
-	require.NotContains(t, args, "-s")
+	require.Contains(t, args, "-s")
+	require.Contains(t, args, "workspace-write")
 }
 
 // TestBuildAppServerArgs tests app-server command building.
@@ -996,7 +1002,8 @@ func TestBuildExecArgs_AlwaysContainsBaseFlags(t *testing.T) {
 
 			require.Equal(t, "exec", args[0], "First arg should be 'exec'")
 			require.Contains(t, args, "--json")
-			require.Contains(t, args, "--full-auto")
+			require.NotContains(t, args, "--full-auto")
+			require.Contains(t, args, `approval_policy="on-request"`)
 			require.Contains(t, args, "--ephemeral")
 			require.Contains(t, args, "--skip-git-repo-check")
 		})

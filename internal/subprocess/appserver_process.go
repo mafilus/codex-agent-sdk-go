@@ -59,7 +59,8 @@ func (t *AppServerTransport) waitProcess(ctx context.Context, cmd *exec.Cmd) {
 
 func processWaitStatus(cmd *exec.Cmd) (syscall.WaitStatus, bool) {
 	if cmd.ProcessState == nil {
-		return 0, false
+		var zero syscall.WaitStatus
+		return zero, false
 	}
 	state, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
 	return state, ok
