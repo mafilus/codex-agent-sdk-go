@@ -191,6 +191,14 @@ func convertCodexItem(item *CodexItem, eventType EventType) *AssistantMessage {
 			},
 		}
 
+		if eventType == EventItemCompleted {
+			msg.Content = append(msg.Content, &ToolResultBlock{
+				Type:      BlockTypeToolResult,
+				ToolUseID: item.ID,
+				IsError:   item.Status == "failed" || item.Status == "declined",
+			})
+		}
+
 	case ItemTypeMCPToolCall:
 		toolName := item.Tool
 		if item.Server != "" {
