@@ -5,7 +5,7 @@ inputs:
   go-version:
     description: 'Go version to use'
     required: false
-    default: '1.25'
+    default: 'stable'
 
 runs:
   using: 'composite'
@@ -14,4 +14,5 @@ runs:
       uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
       with:
         go-version: ${{ inputs.go-version }}
+        check-latest: true
         cache: true
