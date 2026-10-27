@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -191,7 +192,13 @@ func exampleGracefulShutdown() {
 	defer stopReceive()
 
 	go func() {
-		for range client.ReceiveMessages(receiveCtx) {
+		for _, err := range client.ReceiveMessages(receiveCtx) {
+			if err != nil {
+				if !errors.Is(err, context.Canceled) {
+					fmt.Fprintf(os.Stderr, "ReceiveMessages ended: %v\n", err)
+				}
+				return
+			}
 		}
 	}()
 

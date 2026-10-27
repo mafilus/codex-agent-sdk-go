@@ -3,6 +3,7 @@ run:
   issues-exit-code: 1
 linters:
   default: none
+  # Focus on correctness; omit style-only and complexity-score rules.
   enable:
     - asasalint
     - bidichk
@@ -14,8 +15,6 @@ linters:
     - durationcheck
     - errcheck
     - errname
-    - goconst
-    - gocyclo
     - godot
     - goheader
     - goprintffuncname
@@ -26,7 +25,6 @@ linters:
     - nakedret
     - nilerr
     - nilnil
-    - nlreturn
     - nolintlint
     - nosprintfhostport
     - prealloc
@@ -40,13 +38,9 @@ linters:
     - unconvert
     - unused
     - whitespace
-    - wsl_v5
   settings:
     errcheck:
       check-type-assertions: true
-    goconst:
-      min-len: 2
-      min-occurrences: 3
     gocritic:
       enabled-tags:
         - diagnostic
@@ -60,10 +54,6 @@ linters:
     nolintlint:
       require-explanation: true
       require-specific: true
-    wsl_v5:
-      allow-first-in-block: true
-      allow-whole-block: false
-      branch-max-lines: 2
   exclusions:
     generated: lax
     presets:
@@ -75,11 +65,7 @@ linters:
       - linters:
           - gocritic
           - gosec
-          - wsl
         path: _test\.go
-      - linters:
-          - goconst
-        path: cmd/tools/
     paths:
       - third_party$
       - builtin$

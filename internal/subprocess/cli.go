@@ -362,7 +362,10 @@ func (t *CLITransport) SendMessage(ctx context.Context, data []byte) error {
 		}
 
 		select {
-		case <-done:
+		case err := <-done:
+			if err != nil {
+				t.log.Debug("stdin write ended during cancellation", "error", err)
+			}
 		case <-time.After(1 * time.Second):
 			t.log.Warn("write goroutine did not exit after stdin close")
 		}

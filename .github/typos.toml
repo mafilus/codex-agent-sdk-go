@@ -1,2 +1,8 @@
 [files]
 extend-exclude = ["go.mod", "go.sum"]
+
+[default.extend-words]
+# Synthetic thread IDs in protocol fixtures.
+thr = "thr"
+# Keep the backwards-compatible Makefile target.
+intergration = "intergration"

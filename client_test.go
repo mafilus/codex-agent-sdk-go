@@ -1050,7 +1050,8 @@ func TestClient_ConcurrentSendReceiveWhenNotConnected(t *testing.T) {
 
 			ctx := context.Background()
 
-			for range client.ReceiveResponse(ctx) {
+			for _, err := range client.ReceiveResponse(ctx) {
+				assert.ErrorContains(t, err, "not connected")
 				break
 			}
 		}()

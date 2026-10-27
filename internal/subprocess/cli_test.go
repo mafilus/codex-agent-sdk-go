@@ -738,7 +738,7 @@ func TestSendMessage_SetsStdinClosedFlag(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	cancel()
 
-	<-errCh
+	require.ErrorIs(t, <-errCh, context.Canceled)
 
 	require.True(t, transport.stdinClosed, "stdinClosed should be true after cancellation")
 }

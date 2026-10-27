@@ -615,7 +615,6 @@ func (c *Client) GetServerInfo() map[string]any {
 
 // Close terminates the session and cleans up resources.
 func (c *Client) Close() error {
-
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
 		c.closed = true

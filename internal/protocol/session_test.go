@@ -33,7 +33,8 @@ func TestSession_MCPToolsAdvertisedAndDispatched(t *testing.T) {
 		SDKTools: []*config.DynamicTool{{Name: "plain", Description: "Plain tool"}},
 	})
 	session.RegisterMCPServers()
-	tools := session.buildInitializePayload()["dynamicTools"].([]map[string]any)
+	tools, ok := session.buildInitializePayload()["dynamicTools"].([]map[string]any)
+	require.True(t, ok, "dynamicTools must be a tool list")
 	require.Len(t, tools, 2)
 	require.Equal(t, "plain", tools[0]["name"])
 	require.Equal(t, "sdk_mcp__probe__echo", tools[1]["name"])
@@ -48,13 +49,17 @@ func TestSession_MCPToolsAdvertisedAndDispatched(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, map[string]any{"message": "hello"}, received)
 	require.Equal(t, true, result["success"])
-	require.Equal(t, "echoed", result["contentItems"].([]map[string]any)[0]["text"])
+	content, ok := result["contentItems"].([]map[string]any)
+	require.True(t, ok, "contentItems must be a content list")
+	require.NotEmpty(t, content)
+	require.Equal(t, "echoed", content[0]["text"])
 
 	// A colliding explicit tool keeps its name; the MCP alias stays unique.
 	session.options.SDKTools = append(session.options.SDKTools, &config.DynamicTool{
 		Name: "sdk_mcp__probe__echo", Description: "Explicit override",
 	})
-	tools = session.buildInitializePayload()["dynamicTools"].([]map[string]any)
+	tools, ok = session.buildInitializePayload()["dynamicTools"].([]map[string]any)
+	require.True(t, ok, "dynamicTools must be a tool list")
 	require.Len(t, tools, 3)
 	require.Equal(t, "Explicit override", tools[1]["description"])
 	require.Equal(t, "sdk_mcp__probe__echo_2", tools[2]["name"])
@@ -71,7 +76,8 @@ func TestSession_MCPAliasesAndEmptySchema(t *testing.T) {
 	}
 	session := NewSession(slog.Default(), nil, opts)
 	session.RegisterMCPServers()
-	tools := session.buildInitializePayload()["dynamicTools"].([]map[string]any)
+	tools, ok := session.buildInitializePayload()["dynamicTools"].([]map[string]any)
+	require.True(t, ok, "dynamicTools must be a tool list")
 	require.Len(t, tools, 2)
 	require.NotEqual(t, tools[0]["name"], tools[1]["name"])
 	for i, expected := range []string{"a", "a__b"} {
@@ -81,7 +87,10 @@ func TestSession_MCPAliasesAndEmptySchema(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, true, result["success"])
-		require.Equal(t, expected, result["contentItems"].([]map[string]any)[0]["text"])
+		content, ok := result["contentItems"].([]map[string]any)
+		require.True(t, ok, "contentItems must be a content list")
+		require.NotEmpty(t, content)
+		require.Equal(t, expected, content[0]["text"])
 	}
 }
 
@@ -110,7 +119,9 @@ func TestSession_MCPToolPermissions(t *testing.T) {
 				require.NoError(t, config.ConfigureToolPermissionPolicy(opts))
 				session := NewSession(slog.Default(), nil, opts)
 				session.RegisterMCPServers()
-				tools := session.buildInitializePayload()["dynamicTools"].([]map[string]any)
+				tools, ok := session.buildInitializePayload()["dynamicTools"].([]map[string]any)
+				require.True(t, ok, "dynamicTools must be a tool list")
+				require.NotEmpty(t, tools)
 				name := any("mcp__probe__echo")
 				if alias {
 					name = tools[0]["name"]
