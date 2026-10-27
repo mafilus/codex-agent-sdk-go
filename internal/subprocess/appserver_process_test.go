@@ -46,6 +46,14 @@ func runProcessFixture(mode string) int {
 				return 95
 			}
 		}
+		if msg.Method == "initialized" && mode == "blocked-input" {
+			if _, err := fmt.Println(`{"jsonrpc":"2.0","method":"fixture/blocked","params":{}}`); err != nil {
+				return 95
+			}
+			// The parent cancels a request and must kill this non-reading process.
+			<-time.After(10 * time.Second)
+			return 98
+		}
 		if msg.Method == "initialized" && mode != "wait" {
 			for i := range 600 {
 				if _, err := fmt.Printf("{\"jsonrpc\":\"2.0\",\"method\":\"item/agentMessage/delta\",\"params\":{\"index\":%d}}\n", i); err != nil {

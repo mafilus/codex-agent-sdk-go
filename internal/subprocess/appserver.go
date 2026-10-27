@@ -31,7 +31,7 @@ type AppServerTransport struct {
 	stdoutRead io.ReadCloser
 
 	mu             sync.Mutex
-	writeMu        sync.Mutex
+	writeGate      chan struct{}
 	nextID         int64
 	ready          bool
 	closing        bool
@@ -56,6 +56,7 @@ func NewAppServerTransport(log *slog.Logger, opts *config.Options) *AppServerTra
 		log:          log.With(slog.String("component", "appserver")),
 		opts:         opts,
 		pending:      make(map[int64]chan *RPCResponse, 4),
+		writeGate:    make(chan struct{}, 1),
 		notifyCh:     make(chan *RPCNotification, 128),
 		requestCh:    make(chan *RPCIncomingRequest, 32),
 		readDone:     make(chan struct{}),
@@ -83,7 +84,7 @@ func (t *AppServerTransport) Start(ctx context.Context) error {
 
 	t.log.InfoContext(ctx, "starting codex app-server",
 		slog.String("path", path),
-		slog.Any("args", args),
+		slog.Int("arg_count", len(args)),
 	)
 
 	t.mu.Lock()
@@ -165,7 +166,7 @@ func (t *AppServerTransport) initialize(ctx context.Context) error {
 		},
 		"clientInfo": map[string]string{
 			"name":    "github.com/mafilus/codex-agent-sdk-go",
-			"version": "0.1.0",
+			"version": "0.2.2",
 		},
 	}
 
@@ -174,7 +175,7 @@ func (t *AppServerTransport) initialize(ctx context.Context) error {
 		return fmt.Errorf("sending initialize request: %w", err)
 	}
 
-	if err := t.sendNotification("initialized", nil); err != nil {
+	if err := t.sendNotification(ctx, "initialized", nil); err != nil {
 		return fmt.Errorf("sending initialized notification: %w", err)
 	}
 
@@ -213,26 +214,31 @@ func (t *AppServerTransport) SendRequest(
 		Params:  params,
 	}
 
-	if err := t.writeMessage(req); err != nil {
+	if err := t.writeMessageContext(ctx, req); err != nil {
 		return nil, fmt.Errorf("writing request: %w", err)
 	}
 
+	var response *RPCResponse
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case resp := <-ch:
-		if resp.Error != nil {
-			return nil, resp.Error
-		}
-
-		return resp, nil
+	case response = <-ch:
 	case <-t.readDone:
-		return nil, fmt.Errorf("transport closed while waiting for response")
+		// The reader can finish immediately after delivering the final response.
+		select {
+		case response = <-ch:
+		default:
+			return nil, fmt.Errorf("transport closed while waiting for response")
+		}
 	}
+	if response.Error != nil {
+		return nil, response.Error
+	}
+	return response, nil
 }
 
 // sendNotification sends a JSON-RPC notification (no response expected).
-func (t *AppServerTransport) sendNotification(method string, params any) error {
+func (t *AppServerTransport) sendNotification(ctx context.Context, method string, params any) error {
 	var rawParams json.RawMessage
 
 	if params != nil {
@@ -250,7 +256,7 @@ func (t *AppServerTransport) sendNotification(method string, params any) error {
 		Params:  rawParams,
 	}
 
-	return t.writeMessage(notif)
+	return t.writeMessageContext(ctx, notif)
 }
 
 // Notifications returns the channel of incoming notifications.
@@ -299,27 +305,54 @@ func (t *AppServerTransport) Close() error {
 
 // writeMessage marshals and writes a JSON-RPC message to stdin.
 func (t *AppServerTransport) writeMessage(msg any) error {
+	return t.writeMessageContext(context.Background(), msg)
+}
+
+// Cancellation before acquiring the gate leaves the stream intact. Once an
+// actual write starts, cancellation shuts down the transport: a partial JSON
+// frame cannot safely be followed by another request.
+func (t *AppServerTransport) writeMessageContext(ctx context.Context, msg any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("marshaling message: %w", err)
 	}
+	select {
+	case t.writeGate <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.stop:
+		return fmt.Errorf("transport is closing")
+	}
+	defer func() { <-t.writeGate }()
+	if contextErr := ctx.Err(); contextErr != nil {
+		return contextErr
+	}
 
-	t.writeMu.Lock()
-	defer t.writeMu.Unlock()
 	t.mu.Lock()
 	closing := t.closing
 	stdin := t.stdin
 	t.mu.Unlock()
-	if closing {
-		return fmt.Errorf("transport is closing")
+	if closing || stdin == nil {
+		return fmt.Errorf("transport is not writable")
 	}
 
+	cancelDone := make(chan struct{})
+	stopCancel := context.AfterFunc(ctx, func() {
+		t.shutdownOnce.Do(func() { go t.shutdownProcess() })
+		close(cancelDone)
+	})
 	data = append(data, '\n')
-
-	if _, err := stdin.Write(data); err != nil {
+	_, err = stdin.Write(data)
+	if !stopCancel() {
+		<-cancelDone
+		return ctx.Err()
+	}
+	if err != nil {
 		return fmt.Errorf("writing to stdin: %w", err)
 	}
-
 	return nil
 }
 

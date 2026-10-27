@@ -7,6 +7,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -19,7 +21,7 @@ import (
 // MemoryStore provides filesystem-backed persistent storage.
 // All paths must be prefixed with memories/ to prevent directory traversal.
 type MemoryStore struct {
-	basePath string
+	root *os.Root
 }
 
 type observedToolUsage struct {
@@ -33,42 +35,44 @@ var toolUsage observedToolUsage
 // NewMemoryStore creates a new memory store at the specified base path.
 // It creates the base directory and memories subdirectory if they don't exist.
 func NewMemoryStore(basePath string) (*MemoryStore, error) {
-	absPath, err := filepath.Abs(basePath)
+	if err := os.MkdirAll(basePath, 0o750); err != nil {
+		return nil, fmt.Errorf("failed to create base directory: %w", err)
+	}
+	base, err := os.OpenRoot(basePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve base path: %w", err)
+		return nil, fmt.Errorf("failed to open base directory: %w", err)
 	}
-
-	memoriesPath := filepath.Join(absPath, "memories")
-	if err := os.MkdirAll(memoriesPath, 0o755); err != nil {
-		return nil, fmt.Errorf("failed to create memories directory: %w", err)
+	defer base.Close()
+	if mkdirErr := base.MkdirAll("memories", 0o700); mkdirErr != nil {
+		return nil, fmt.Errorf("failed to create memories directory: %w", mkdirErr)
 	}
-
-	return &MemoryStore{basePath: absPath}, nil
+	root, err := base.OpenRoot("memories")
+	if err != nil {
+		return nil, fmt.Errorf("failed to open memories directory: %w", err)
+	}
+	return &MemoryStore{root: root}, nil
 }
 
-// validatePath ensures the path starts with /memories and resolves to within basePath.
-func (m *MemoryStore) validatePath(path string) (string, error) {
-	normalized := strings.TrimSpace(path)
-	normalized = strings.TrimPrefix(normalized, "./")
-	normalized = strings.TrimPrefix(normalized, "/")
+// Close releases the directory handle owned by the store.
+func (m *MemoryStore) Close() error { return m.root.Close() }
 
-	if !strings.HasPrefix(normalized, "memories") {
+// validatePath returns a path relative to the pinned memories root. Root methods
+// enforce confinement during the filesystem operation, including symlink races.
+func (m *MemoryStore) validatePath(path string) (string, error) {
+	normalized := filepath.FromSlash(strings.TrimSpace(path))
+	normalized = strings.TrimPrefix(normalized, "."+string(filepath.Separator))
+	normalized = strings.TrimPrefix(normalized, string(filepath.Separator))
+	if normalized != "memories" && !strings.HasPrefix(normalized, "memories"+string(filepath.Separator)) {
 		return "", fmt.Errorf("path must start with memories/, got: %s", path)
 	}
-
-	fullPath := filepath.Join(m.basePath, normalized)
-
-	// Ensure the resolved path is within basePath
-	absPath, err := filepath.Abs(fullPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve path: %w", err)
+	cleaned := filepath.Clean(normalized)
+	if !filepath.IsLocal(cleaned) || (cleaned != "memories" && !strings.HasPrefix(cleaned, "memories"+string(filepath.Separator))) {
+		return "", fmt.Errorf("path escapes memories directory: %s", path)
 	}
-
-	if !strings.HasPrefix(absPath, m.basePath) {
-		return "", fmt.Errorf("path escapes base directory: %s", path)
+	if cleaned == "memories" {
+		return ".", nil
 	}
-
-	return absPath, nil
+	return strings.TrimPrefix(cleaned, "memories"+string(filepath.Separator)), nil
 }
 
 // Read reads file contents or lists directory contents.
@@ -78,7 +82,7 @@ func (m *MemoryStore) Read(path string) (string, error) {
 		return "", err
 	}
 
-	info, err := os.Stat(fullPath)
+	info, err := m.root.Stat(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", fmt.Errorf("file not found: %s", path)
@@ -88,7 +92,7 @@ func (m *MemoryStore) Read(path string) (string, error) {
 	}
 
 	if info.IsDir() {
-		dirEntries, readErr := os.ReadDir(fullPath)
+		dirEntries, readErr := fs.ReadDir(m.root.FS(), filepath.ToSlash(fullPath))
 		if readErr != nil {
 			return "", fmt.Errorf("failed to read directory: %w", readErr)
 		}
@@ -107,7 +111,7 @@ func (m *MemoryStore) Read(path string) (string, error) {
 		return strings.Join(names, "\n"), nil
 	}
 
-	content, err := os.ReadFile(fullPath)
+	content, err := m.root.ReadFile(fullPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read file: %w", err)
 	}
@@ -124,11 +128,11 @@ func (m *MemoryStore) Write(path, content string) error {
 
 	// Ensure parent directory exists
 	dir := filepath.Dir(fullPath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := m.root.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("failed to create parent directory: %w", err)
 	}
 
-	if err := os.WriteFile(fullPath, []byte(content), 0o600); err != nil {
+	if err := m.root.WriteFile(fullPath, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("failed to write file: %w", err)
 	}
 
@@ -144,11 +148,11 @@ func (m *MemoryStore) Append(path, content string) error {
 
 	// Ensure parent directory exists
 	dir := filepath.Dir(fullPath)
-	if mkdirErr := os.MkdirAll(dir, 0o755); mkdirErr != nil {
+	if mkdirErr := m.root.MkdirAll(dir, 0o700); mkdirErr != nil {
 		return fmt.Errorf("failed to create parent directory: %w", mkdirErr)
 	}
 
-	f, err := os.OpenFile(fullPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := m.root.OpenFile(fullPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("failed to open file for append: %w", err)
 	}
@@ -168,7 +172,7 @@ func (m *MemoryStore) Delete(path string) error {
 		return err
 	}
 
-	if err := os.Remove(fullPath); err != nil {
+	if err := m.root.Remove(fullPath); err != nil {
 		return fmt.Errorf("failed to delete: %w", err)
 	}
 
@@ -189,11 +193,11 @@ func (m *MemoryStore) Rename(oldPath, newPath string) error {
 
 	// Ensure destination parent directory exists
 	dir := filepath.Dir(newFullPath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := m.root.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
-	if err := os.Rename(oldFullPath, newFullPath); err != nil {
+	if err := m.root.Rename(oldFullPath, newFullPath); err != nil {
 		return fmt.Errorf("failed to rename: %w", err)
 	}
 
@@ -207,7 +211,7 @@ func (m *MemoryStore) List(path string) ([]string, error) {
 		return nil, err
 	}
 
-	entries, err := os.ReadDir(fullPath)
+	entries, err := fs.ReadDir(m.root.FS(), filepath.ToSlash(fullPath))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read directory: %w", err)
 	}
@@ -444,6 +448,11 @@ func main() {
 		fmt.Printf("Failed to create memory store: %v\n", err)
 		os.Exit(1)
 	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to close memory store: %v\n", err)
+		}
+	}()
 
 	fmt.Println("Memory store created at ./memory/memories/")
 	fmt.Println()
@@ -528,27 +537,28 @@ func main() {
 	fmt.Println()
 	fmt.Println("Files persisted in ./memory/memories/:")
 
-	entries, listErr := os.ReadDir("./memory/memories")
-	if listErr != nil {
-		fmt.Printf("Failed to list directory: %v\n", listErr)
+	printStoredMemories(os.Stdout, store)
+}
 
+// printStoredMemories uses the same pinned root as the MCP tools.
+func printStoredMemories(out io.Writer, store *MemoryStore) {
+	entries, err := store.List("memories")
+	if err != nil {
+		fmt.Fprintf(out, "Failed to list directory: %v\n", err)
 		return
 	}
-
-	for _, entry := range entries {
-		entryPath := filepath.Join("./memory/memories", entry.Name())
-
-		if !entry.IsDir() {
-			content, readErr := os.ReadFile(entryPath)
-			if readErr != nil {
-				fmt.Printf("  %s: (error reading)\n", entry.Name())
-
-				continue
-			}
-
-			fmt.Printf("  %s: %s\n", entry.Name(), strings.TrimSpace(string(content)))
-		} else {
-			fmt.Printf("  %s/\n", entry.Name())
+	for _, name := range entries {
+		if strings.HasSuffix(name, "/") {
+			fmt.Fprintf(out, "  %s\n", name)
+			continue
 		}
+		// Names returned by List are filesystem entries, not user input:
+		// preserve them exactly rather than applying path normalization.
+		content, readErr := store.root.ReadFile(name)
+		if readErr != nil {
+			fmt.Fprintf(out, "  %s: (error reading)\n", name)
+			continue
+		}
+		fmt.Fprintf(out, "  %s: %s\n", name, strings.TrimSpace(string(content)))
 	}
 }

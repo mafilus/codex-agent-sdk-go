@@ -268,6 +268,23 @@ func parseCodexTurnCompleted(data map[string]any) (*ResultMessage, error) {
 		result.Result = &txt
 	}
 
+	if status, _ := data["status"].(string); status == "failed" || status == "interrupted" {
+		result.IsError = true
+		if status == "interrupted" {
+			result.Subtype = "interrupted"
+		}
+	}
+	if result.IsError {
+		if result.Subtype == "success" {
+			result.Subtype = "error"
+		}
+		if errorData, ok := data["error"].(map[string]any); ok {
+			if text, ok := errorData["message"].(string); ok {
+				result.Result = &text
+			}
+		}
+	}
+
 	// Parse usage if present
 	if usageData, ok := data["usage"].(map[string]any); ok {
 		usage := &Usage{}

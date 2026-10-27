@@ -97,6 +97,19 @@ App-server events are queued in order instead of dropped when the delivery
 channels fill. The queues drain on EOF and are discarded on explicit shutdown.
 Their memory use grows with the backlog, so consume events continuously.
 
+Cancelling an RPC while it waits for the writer leaves the transport open.
+Cancelling during a write closes the transport and stops its owned process,
+because a partially written JSON frame cannot safely be reused. Create a new
+client after this kind of cancellation.
+
+Native terminal turns preserve failure and interruption status in
+`ResultMessage`: failed turns have subtype `error`, interrupted turns have
+subtype `interrupted`, and both set `IsError` to true.
+
+Startup logs omit command argument values. MCP headers and environment values
+can still appear in the CLI process arguments; configure host access to process
+information accordingly.
+
 ## Quick Start
 
 ### One-shot query
@@ -284,6 +297,13 @@ Options are backend-dependent. Unsupported combinations fail fast with `ErrUnsup
 | `WithPermissionPromptToolName("stdio")` | Permission prompt tool name |
 | `WithMCPServers(...)` | Register MCP servers |
 | `WithSDKTools(tools...)` | Register SDK-defined tools via `NewTool` (uses `dynamicTools` API) |
+
+MCP permission names currently use `mcp__<server>__<tool>`. Names containing
+`__` can collide: server `a` with tool `b__c` and server `a__b` with tool `c`
+both become `mcp__a__b__c`. Distinct wire aliases do not resolve this ambiguity
+in permission callbacks or allow/block lists. Avoid `__` in registered server
+and tool names when relying on per-tool permissions until this limitation is
+resolved.
 
 ### Session and advanced options
 

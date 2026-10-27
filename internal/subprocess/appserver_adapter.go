@@ -1137,6 +1137,18 @@ func (a *AppServerAdapter) translateTurnCompleted(
 	params map[string]any,
 ) map[string]any {
 	event := map[string]any{"type": "turn.completed"}
+	if turn, ok := params["turn"].(map[string]any); ok {
+		if status, ok := turn["status"].(string); ok {
+			event["status"] = status
+			event["is_error"] = status == "failed" || status == "interrupted"
+		}
+		if turnError, ok := turn["error"].(map[string]any); ok {
+			event["error"] = turnError
+		}
+		if id, ok := turn["id"].(string); ok {
+			event["turn_id"] = id
+		}
+	}
 
 	a.mu.Lock()
 	if a.threadID != "" {
@@ -1144,6 +1156,10 @@ func (a *AppServerAdapter) translateTurnCompleted(
 		event["thread_id"] = a.threadID
 	}
 	a.mu.Unlock()
+	if id := extractThreadID(params); id != "" {
+		event["session_id"] = id
+		event["thread_id"] = id
+	}
 
 	if usage, ok := params["usage"].(map[string]any); ok {
 		event["usage"] = usage
@@ -1159,8 +1175,10 @@ func (a *AppServerAdapter) translateTurnCompleted(
 		}
 	}
 
-	if v, ok := params["isError"]; ok {
-		event["is_error"] = v
+	if _, nativeStatus := event["status"]; !nativeStatus {
+		if v, ok := params["isError"]; ok {
+			event["is_error"] = v
+		}
 	}
 
 	if v, ok := params["result"]; ok {

@@ -189,7 +189,7 @@ func BuildAppServerArgs(options *config.Options) []string {
 // BuildEnvironment constructs the environment variables for the CLI process.
 func BuildEnvironment(options *config.Options) []string {
 	env := os.Environ()
-	env = append(env, "CODEX_CLI_SDK_VERSION=0.1.0")
+	env = append(env, "CODEX_CLI_SDK_VERSION=0.2.2")
 
 	for key, value := range options.Env {
 		env = append(env, fmt.Sprintf("%s=%s", key, value))

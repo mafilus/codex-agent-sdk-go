@@ -102,7 +102,7 @@ func (t *CLITransport) Start(ctx context.Context) error {
 		t.args = cli.BuildExecArgs(t.prompt, t.options)
 	}
 
-	t.log.DebugContext(ctx, "built command arguments", slog.Any("args", t.args))
+	t.log.DebugContext(ctx, "built command arguments", slog.Int("arg_count", len(t.args)))
 
 	t.env = cli.BuildEnvironment(t.options)
 

@@ -160,6 +160,11 @@ func (c *Controller) SendRequest(
 	c.pendingMu.Lock()
 	c.pending[requestID] = pending
 	c.pendingMu.Unlock()
+	defer func() {
+		c.pendingMu.Lock()
+		delete(c.pending, requestID)
+		c.pendingMu.Unlock()
+	}()
 
 	requestPayload := map[string]any{"subtype": subtype}
 	maps.Copy(requestPayload, payload)
@@ -188,10 +193,6 @@ func (c *Controller) SendRequest(
 		return resp, nil
 
 	case <-c.done:
-		c.pendingMu.Lock()
-		delete(c.pending, requestID)
-		c.pendingMu.Unlock()
-
 		if err := c.FatalError(); err != nil {
 			return nil, fmt.Errorf("transport error: %w", err)
 		}
@@ -199,17 +200,9 @@ func (c *Controller) SendRequest(
 		return nil, errors.ErrControllerStopped
 
 	case <-time.After(timeout):
-		c.pendingMu.Lock()
-		delete(c.pending, requestID)
-		c.pendingMu.Unlock()
-
 		return nil, fmt.Errorf("%w after %s", errors.ErrRequestTimeout, timeout)
 
 	case <-ctx.Done():
-		c.pendingMu.Lock()
-		delete(c.pending, requestID)
-		c.pendingMu.Unlock()
-
 		return nil, ctx.Err()
 	}
 }

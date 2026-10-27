@@ -474,7 +474,14 @@ func (s *Session) HandleDynamicToolCall(
 
 	// Try plain name lookup in dynamic tools first.
 	if tool, ok := s.sdkDynamicTools[toolFullName]; ok {
-		return s.executeDynamicTool(ctx, tool, arguments)
+		updated, denied, err := s.authorizeToolCall(ctx, toolFullName, arguments)
+		if err != nil {
+			return nil, err
+		}
+		if denied != nil {
+			return deniedToolResponse(denied.Message), nil
+		}
+		return s.executeDynamicTool(ctx, tool, updated)
 	}
 
 	// Fall back to MCP server lookup for mcp__<server>__<tool> names.
@@ -506,25 +513,12 @@ func (s *Session) HandleDynamicToolCall(
 		}, nil
 	}
 
-	if s.options != nil && s.options.CanUseTool != nil {
-		publicName := "mcp__" + serverName + "__" + toolName
-		decision, err := s.options.CanUseTool(ctx, publicName, arguments, &permission.Context{})
-		if err != nil {
-			return nil, err
-		}
-		switch d := decision.(type) {
-		case *permission.ResultAllow:
-			if d.UpdatedInput != nil {
-				arguments = d.UpdatedInput
-			}
-		case *permission.ResultDeny:
-			return map[string]any{
-				"success":      false,
-				"contentItems": []map[string]any{{"type": "inputText", "text": d.Message}},
-			}, nil
-		default:
-			return nil, fmt.Errorf("tool permission callback returned invalid result %T", decision)
-		}
+	arguments, denied, err := s.authorizeToolCall(ctx, "mcp__"+serverName+"__"+toolName, arguments)
+	if err != nil {
+		return nil, err
+	}
+	if denied != nil {
+		return deniedToolResponse(denied.Message), nil
 	}
 	result, callErr := server.CallTool(ctx, toolName, arguments)
 	if callErr != nil {
@@ -546,6 +540,38 @@ func (s *Session) HandleDynamicToolCall(
 		"success":      !isError,
 		"contentItems": contentItems,
 	}, nil
+}
+
+// authorizeToolCall applies the same policy to plain dynamic tools and MCP tools.
+func (s *Session) authorizeToolCall(ctx context.Context, name string, input map[string]any) (map[string]any, *permission.ResultDeny, error) {
+	if s.options == nil || s.options.CanUseTool == nil {
+		return input, nil, nil
+	}
+	decision, err := s.options.CanUseTool(ctx, name, input, &permission.Context{})
+	if err != nil {
+		return nil, nil, err
+	}
+	switch d := decision.(type) {
+	case *permission.ResultAllow:
+		if d != nil {
+			if d.UpdatedInput != nil {
+				input = d.UpdatedInput
+			}
+			return input, nil, nil
+		}
+	case *permission.ResultDeny:
+		if d != nil {
+			return nil, d, nil
+		}
+	}
+	return nil, nil, fmt.Errorf("tool permission callback returned invalid result %T", decision)
+}
+
+func deniedToolResponse(message string) map[string]any {
+	return map[string]any{
+		"success":      false,
+		"contentItems": []map[string]any{{"type": "inputText", "text": message}},
+	}
 }
 
 // executeDynamicTool calls a dynamic tool handler and formats the result

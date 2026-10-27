@@ -6,3 +6,5 @@ extend-exclude = ["go.mod", "go.sum"]
 thr = "thr"
 # Keep the backwards-compatible Makefile target.
 intergration = "intergration"
+# Short type variable used in protocol tests.
+typ = "typ"

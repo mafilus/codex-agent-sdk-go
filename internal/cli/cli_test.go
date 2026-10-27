@@ -627,8 +627,8 @@ func TestBuildEnvironment_Basic(t *testing.T) {
 	env := BuildEnvironment(options)
 
 	require.NotNil(t, env)
-	require.True(t, slices.Contains(env, "CODEX_CLI_SDK_VERSION=0.1.0"),
-		"Expected CODEX_CLI_SDK_VERSION=0.1.0 in environment")
+	require.True(t, slices.Contains(env, "CODEX_CLI_SDK_VERSION=0.2.2"),
+		"Expected CODEX_CLI_SDK_VERSION=0.2.2 in environment")
 }
 
 // TestBuildEnvironment_EnvVarsPassedToSubprocess tests environment variable handling.
@@ -680,8 +680,8 @@ func TestBuildEnvironment_SDKVersionAlwaysPresent(t *testing.T) {
 			options := &config.Options{Env: tt.env}
 			env := BuildEnvironment(options)
 
-			require.True(t, slices.Contains(env, "CODEX_CLI_SDK_VERSION=0.1.0"),
-				"Expected CODEX_CLI_SDK_VERSION=0.1.0 in environment")
+			require.True(t, slices.Contains(env, "CODEX_CLI_SDK_VERSION=0.2.2"),
+				"Expected CODEX_CLI_SDK_VERSION=0.2.2 in environment")
 		})
 	}
 }
