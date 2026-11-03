@@ -41,7 +41,6 @@ type CLITransport struct {
 	stderr         io.ReadCloser
 	stderrCallback func(string)
 	mu             sync.Mutex
-	isStreaming    bool
 	closing        bool
 	stdinClosed    bool
 }
@@ -55,26 +54,11 @@ func NewCLITransport(
 	prompt string,
 	options *config.Options,
 ) *CLITransport {
-	return NewCLITransportWithMode(log, prompt, options, false)
-}
-
-// NewCLITransportWithMode creates a new CLI transport with explicit mode control.
-//
-// When isStreaming is true, the transport spawns `codex app-server` and keeps
-// stdin open for bidirectional JSON-RPC. When false, it spawns `codex exec`
-// for one-shot queries.
-func NewCLITransportWithMode(
-	log *slog.Logger,
-	prompt string,
-	options *config.Options,
-	isStreaming bool,
-) *CLITransport {
 	return &CLITransport{
 		log:            log.With("component", "cli_transport"),
 		options:        options,
 		prompt:         prompt,
 		stderrCallback: options.Stderr,
-		isStreaming:    isStreaming,
 	}
 }
 
@@ -95,12 +79,7 @@ func (t *CLITransport) Start(ctx context.Context) error {
 
 	t.cliPath = cliPath
 
-	// Build command arguments based on mode
-	if t.isStreaming {
-		t.args = cli.BuildAppServerArgs(t.options)
-	} else {
-		t.args = cli.BuildExecArgs(t.prompt, t.options)
-	}
+	t.args = cli.BuildExecArgs(t.prompt, t.options)
 
 	t.log.DebugContext(ctx, "built command arguments", slog.Int("arg_count", len(t.args)))
 

@@ -31,10 +31,16 @@ Capability selection/validation logic lives in:
 - `mcp.go`: `Tool` interface and `NewTool` constructor for SDK-defined tools
 - `internal/subprocess/`: process and app-server adapters
 - `internal/protocol/`: JSON-RPC/session controller, dynamic tool dispatch
+- `internal/protocol/connection.go`: shared transport/controller/session startup
+  and cleanup for Query, QueryStream and Client; callers retain backend selection
+  and turn completion rules
 - `internal/message/`: parsing + public message mapping
 - `internal/config/`: options, `DynamicTool` type, and backend capability policy
 - `internal/session/`: SQLite-based session metadata lookup
 - `internal/mcp/`: MCP server integration and status
+
+`CLITransport` only launches `codex exec`. Built-in streaming and persistent
+sessions use `AppServerAdapter` and its owned `AppServerTransport` process.
 
 ## Change Impact Guidance
 

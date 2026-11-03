@@ -35,10 +35,7 @@ const (
 // Client implements the interactive client interface.
 type Client struct {
 	log        *slog.Logger
-	transport  config.Transport
-	controller *protocol.Controller
-	session    *protocol.Session
-	options    *config.Options
+	connection *protocol.Connection
 
 	messages chan message.Message
 
@@ -111,8 +108,6 @@ func (c *Client) initializeCore(ctx context.Context, options *config.Options) er
 		return err
 	}
 
-	c.options = options
-
 	var transport config.Transport
 
 	if options.Transport != nil {
@@ -127,33 +122,8 @@ func (c *Client) initializeCore(ctx context.Context, options *config.Options) er
 		transport = subprocess.NewAppServerAdapter(c.log, options)
 	}
 
-	c.transport = transport
-	if err := transport.Start(ctx); err != nil {
-		return fmt.Errorf("start transport: %w", err)
-	}
-
-	c.controller = protocol.NewController(c.log, transport)
-	if err := c.controller.Start(ctx); err != nil {
-		_ = transport.Close()
-
-		return fmt.Errorf("start protocol controller: %w", err)
-	}
-
-	c.session = protocol.NewSession(c.log, c.controller, options)
-	c.session.RegisterMCPServers()
-	c.session.RegisterDynamicTools()
-	c.session.RegisterHandlers()
-
-	// Client always initializes because app-server mode requires thread/start
-	// to establish the bidirectional session. This differs from Query() which
-	// conditionally initializes only when hooks/callbacks/MCP are configured.
-	if err := c.session.Initialize(ctx); err != nil {
-		_ = transport.Close()
-
-		return fmt.Errorf("initialize session: %w", err)
-	}
-
-	return nil
+	c.connection = protocol.NewConnection(c.log, transport, options)
+	return c.connection.Start(ctx, true)
 }
 
 // Start establishes a connection to the Codex CLI.
@@ -247,11 +217,11 @@ func (c *Client) StartWithStream(
 
 // emitInitMessage sends a synthetic init system message containing server info.
 func (c *Client) emitInitMessage() {
-	if c.session == nil {
+	if c.connection == nil {
 		return
 	}
 
-	serverInfo := c.session.GetInitializationResult()
+	serverInfo := c.connection.Session.GetInitializationResult()
 	if len(serverInfo) == 0 {
 		return
 	}
@@ -275,7 +245,7 @@ func (c *Client) streamMessages(
 	messages iter.Seq[message.StreamingMessage],
 ) (err error) {
 	defer func() {
-		if endErr := c.transport.EndInput(); endErr != nil {
+		if endErr := c.connection.Transport.EndInput(); endErr != nil {
 			if err == nil {
 				err = fmt.Errorf("end input: %w", endErr)
 			}
@@ -296,7 +266,7 @@ func (c *Client) streamMessages(
 			return fmt.Errorf("marshal streaming message: %w", marshalErr)
 		}
 
-		if sendErr := c.transport.SendMessage(ctx, data); sendErr != nil {
+		if sendErr := c.connection.Transport.SendMessage(ctx, data); sendErr != nil {
 			return fmt.Errorf("send streaming message: %w", sendErr)
 		}
 	}
@@ -308,13 +278,13 @@ func (c *Client) streamMessages(
 func (c *Client) readLoop(ctx context.Context) error {
 	defer close(c.messages)
 
-	rawMessages := c.controller.Messages()
+	rawMessages := c.connection.Controller.Messages()
 
 	for {
 		select {
 		case msg, ok := <-rawMessages:
 			if !ok {
-				if err := c.controller.FatalError(); err != nil {
+				if err := c.connection.Controller.FatalError(); err != nil {
 					c.setFatalError(err)
 
 					return err
@@ -343,8 +313,8 @@ func (c *Client) readLoop(ctx context.Context) error {
 				return ctx.Err()
 			}
 
-		case <-c.controller.Done():
-			if err := c.controller.FatalError(); err != nil {
+		case <-c.connection.Controller.Done():
+			if err := c.connection.Controller.FatalError(); err != nil {
 				c.setFatalError(err)
 
 				return err
@@ -386,7 +356,7 @@ func (c *Client) Query(ctx context.Context, prompt string, sessionID ...string) 
 		return fmt.Errorf("marshal query: %w", err)
 	}
 
-	return c.transport.SendMessage(ctx, data)
+	return c.connection.Transport.SendMessage(ctx, data)
 }
 
 // receive waits for and returns the next message from the agent.
@@ -478,7 +448,7 @@ func (c *Client) Interrupt(ctx context.Context) error {
 		return errors.ErrClientNotConnected
 	}
 
-	_, err := c.controller.SendRequest(ctx, "interrupt", nil, interruptTimeout)
+	_, err := c.connection.Controller.SendRequest(ctx, "interrupt", nil, interruptTimeout)
 	if err != nil {
 		return fmt.Errorf("send interrupt signal: %w", err)
 	}
@@ -496,7 +466,7 @@ func (c *Client) RewindFiles(ctx context.Context, userMessageID string) error {
 		"user_message_id": userMessageID,
 	}
 
-	_, err := c.controller.SendRequest(ctx, "rewind_files", payload, rewindFilesTimeout)
+	_, err := c.connection.Controller.SendRequest(ctx, "rewind_files", payload, rewindFilesTimeout)
 	if err != nil {
 		return fmt.Errorf("rewind files: %w", err)
 	}
@@ -512,7 +482,7 @@ func (c *Client) SetPermissionMode(ctx context.Context, mode string) error {
 
 	payload := map[string]any{"mode": mode}
 
-	_, err := c.controller.SendRequest(ctx, "set_permission_mode", payload, setPermissionModeTimeout)
+	_, err := c.connection.Controller.SendRequest(ctx, "set_permission_mode", payload, setPermissionModeTimeout)
 	if err != nil {
 		return fmt.Errorf("set permission mode to %q: %w", mode, err)
 	}
@@ -528,7 +498,7 @@ func (c *Client) SetModel(ctx context.Context, model *string) error {
 
 	payload := map[string]any{"model": model}
 
-	_, err := c.controller.SendRequest(ctx, "set_model", payload, setModelTimeout)
+	_, err := c.connection.Controller.SendRequest(ctx, "set_model", payload, setModelTimeout)
 	if err != nil {
 		return fmt.Errorf("set model: %w", err)
 	}
@@ -542,7 +512,7 @@ func (c *Client) GetMCPStatus(ctx context.Context) (*mcp.Status, error) {
 		return nil, errors.ErrClientNotConnected
 	}
 
-	resp, err := c.controller.SendRequest(ctx, "mcp_status", nil, mcpStatusTimeout)
+	resp, err := c.connection.Controller.SendRequest(ctx, "mcp_status", nil, mcpStatusTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("get mcp status: %w", err)
 	}
@@ -560,7 +530,7 @@ func (c *Client) GetMCPStatus(ctx context.Context) (*mcp.Status, error) {
 	}
 
 	c.mu.Lock()
-	session := c.session
+	session := c.connection.Session
 	c.mu.Unlock()
 
 	if session != nil {
@@ -581,7 +551,7 @@ func (c *Client) ListModels(ctx context.Context) ([]model.Info, error) {
 		return nil, errors.ErrClientNotConnected
 	}
 
-	resp, err := c.controller.SendRequest(ctx, "list_models", nil, listModelsTimeout)
+	resp, err := c.connection.Controller.SendRequest(ctx, "list_models", nil, listModelsTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("list models: %w", err)
 	}
@@ -606,11 +576,11 @@ func (c *Client) GetServerInfo() map[string]any {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.session == nil {
+	if c.connection == nil {
 		return nil
 	}
 
-	return c.session.GetInitializationResult()
+	return c.connection.Session.GetInitializationResult()
 }
 
 // Close terminates the session and cleans up resources.
@@ -630,12 +600,8 @@ func (c *Client) Close() error {
 
 		close(c.done)
 
-		if c.controller != nil {
-			c.controller.Stop()
-		}
-
-		if c.transport != nil {
-			c.closeErr = c.transport.Close()
+		if c.connection != nil {
+			c.closeErr = c.connection.Close()
 		}
 
 		if c.eg != nil {
@@ -654,10 +620,10 @@ func (c *Client) Close() error {
 func (c *Client) ProcessLifecycle() (config.ProcessLifecycle, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.transport == nil {
+	if c.connection == nil {
 		return nil, config.ErrProcessNotStarted
 	}
-	provider, ok := c.transport.(config.ProcessLifecycleProvider)
+	provider, ok := c.connection.Transport.(config.ProcessLifecycleProvider)
 	if !ok {
 		return nil, config.ErrProcessUnsupported
 	}

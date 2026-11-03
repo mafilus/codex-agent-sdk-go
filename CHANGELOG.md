@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Remove the unused app-server mode from the exec-only `CLITransport`.
+- Share transport/controller/session startup and cleanup across `Query`,
+  `QueryStream` and `Client`, preserving their backend and completion rules.
+- Release connection resources on startup failure, joining cleanup errors with
+  the startup error while preserving optional process lifecycle observation.
+
 ## v0.2.2 - 2026-10-27
 
 ### Fixed

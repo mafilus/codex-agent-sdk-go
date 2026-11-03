@@ -175,46 +175,19 @@ func Query(
 			transport = subprocess.NewCLITransport(log, prompt, options)
 		}
 
-		log.Info("starting transport")
-
-		if err := transport.Start(ctx); err != nil {
-			log.Error("failed to start CLI", "error", err)
+		connection := protocol.NewConnection(log, transport, options)
+		if err := connection.Start(ctx, useAppServerQuery); err != nil {
 			yield(nil, err)
 
 			return
 		}
-
 		defer func() {
-			if err := transport.Close(); err != nil {
-				log.Warn("failed to close transport", "error", err)
+			if err := connection.Close(); err != nil {
+				log.Warn("failed to close connection", "error", err)
 			}
 		}()
 
-		log.Info("successfully started Codex CLI")
-
-		controller := protocol.NewController(log, transport)
-		if err := controller.Start(ctx); err != nil {
-			yield(nil, fmt.Errorf("start protocol controller: %w", err))
-
-			return
-		}
-
-		defer controller.Stop()
-
-		session := protocol.NewSession(log, controller, options)
-		session.RegisterMCPServers()
-		session.RegisterDynamicTools()
-		session.RegisterHandlers()
-
-		if useAppServerQuery || session.NeedsInitialization() {
-			log.Debug("initializing session for hooks/callbacks")
-
-			if err := session.Initialize(ctx); err != nil {
-				yield(nil, fmt.Errorf("initialize session: %w", err))
-
-				return
-			}
-		}
+		controller := connection.Controller
 
 		if useAppServerQuery {
 			userMessage := buildInitialUserMessage(prompt, options)
@@ -444,44 +417,19 @@ func QueryStream(
 
 		transport := createStreamingTransport(log, options)
 
-		log.Info("starting transport in streaming mode")
-
-		if err := transport.Start(ctx); err != nil {
-			log.Error("failed to start CLI", "error", err)
+		connection := protocol.NewConnection(log, transport, options)
+		if err := connection.Start(ctx, true); err != nil {
 			yield(nil, err)
 
 			return
 		}
-
 		defer func() {
-			if err := transport.Close(); err != nil {
-				log.Warn("failed to close transport", "error", err)
+			if err := connection.Close(); err != nil {
+				log.Warn("failed to close connection", "error", err)
 			}
 		}()
 
-		log.Info("successfully started Codex CLI in streaming mode")
-
-		controller := protocol.NewController(log, transport)
-		if err := controller.Start(ctx); err != nil {
-			yield(nil, fmt.Errorf("start protocol controller: %w", err))
-
-			return
-		}
-
-		defer controller.Stop()
-
-		session := protocol.NewSession(log, controller, options)
-		session.RegisterMCPServers()
-		session.RegisterDynamicTools()
-		session.RegisterHandlers()
-
-		log.Debug("initializing session for streaming mode")
-
-		if err := session.Initialize(ctx); err != nil {
-			yield(nil, fmt.Errorf("initialize session: %w", err))
-
-			return
-		}
+		controller := connection.Controller
 
 		rawMessages := controller.Messages()
 
