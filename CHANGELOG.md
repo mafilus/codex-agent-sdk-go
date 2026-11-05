@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.2.3 - 2026-11-05
+
+### Integration tests and CI
+
 - Add explicit opt-in live tests using an externally supplied ChatGPT auth file
   and model; skip all live integration tests when credentials are not supplied.
 - Add isolated Linux live scenarios for both query backends, streaming, multi-turn
@@ -10,11 +14,34 @@
 - Preserve the read-only sandbox when the live permission-mode test switches to
   `askAll`, with an offline regression check of the emitted RPC options.
 
+### Internal lifecycle
+
 - Remove the unused app-server mode from the exec-only `CLITransport`.
 - Share transport/controller/session startup and cleanup across `Query`,
   `QueryStream` and `Client`, preserving their backend and completion rules.
 - Release connection resources on startup failure, joining cleanup errors with
   the startup error while preserving optional process lifecycle observation.
+- Align the reported SDK and app-server client versions with this release.
+
+### Validation and limits
+
+- The pre-release implementation passed all eight live scenarios, including
+  both denied-tool cases, all 22 legacy integration tests, and the harness checks:
+  50 tests and subtests passed, with no failures or skips, using the race detector.
+- Independent final review accepted the tested candidate and received evidence
+  with a bounded freeze verdict (`PASS_GEL_BORNE`).
+- Live qualification is limited to Linux, Codex CLI 0.166.0 and `gpt-5.6-luna`,
+  with a read-only checkout and hidden personal home. Reasoning effort was not
+  overridden or independently observed. The release version metadata update
+  follows that campaign; it does not represent another live execution.
+- Token refresh behavior, other CLI/model/OS combinations and hosts without the
+  external isolation guard are outside that qualification.
+
+Update with:
+
+```sh
+go get github.com/mafilus/codex-agent-sdk-go@v0.2.3
+```
 
 ## v0.2.2 - 2026-10-27
 

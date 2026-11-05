@@ -166,7 +166,7 @@ func (t *AppServerTransport) initialize(ctx context.Context) error {
 		},
 		"clientInfo": map[string]string{
 			"name":    "github.com/mafilus/codex-agent-sdk-go",
-			"version": "0.2.2",
+			"version": "0.2.3",
 		},
 	}
 
