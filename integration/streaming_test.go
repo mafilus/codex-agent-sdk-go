@@ -14,17 +14,17 @@ import (
 
 // TestPartialMessages_DisabledByDefault verifies no StreamEvents when disabled.
 func TestPartialMessages_DisabledByDefault(t *testing.T) {
+	requireLiveBackend(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	var streamEventCount int
 
-	for msg, err := range codexsdk.Query(ctx, "Say 'hello'",
-		codexsdk.WithPermissionMode("acceptAll"),
+	for msg, err := range liveQuery(ctx, "Say 'hello'",
+		codexsdk.WithPermissionMode("default"),
 	) {
 		if err != nil {
-			skipIfCLINotInstalled(t, err)
-			t.Fatalf("Query failed: %v", err)
+			t.Fatalf("Query failed: %v", safeLiveError(err))
 		}
 
 		if _, ok := msg.(*codexsdk.StreamEvent); ok {

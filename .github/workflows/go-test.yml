@@ -24,3 +24,6 @@ jobs:
 
       - name: Test
         run: go test -race ./...
+
+      - name: Test live opt-in boundaries without credentials
+        run: env -u CODEX_SDK_LIVE_AUTH_FILE -u CODEX_SDK_LIVE_MODEL go test -count=1 -race -tags=integration -timeout=2m ./integration/...

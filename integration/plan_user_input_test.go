@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,26 +18,30 @@ import (
 // user input callbacks: the agent uses request_user_input, the SDK invokes
 // the callback, and the agent receives the answer.
 func TestPlanMode_UserInputCallback(t *testing.T) {
+	requireLiveBackend(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	var callbackInvoked atomic.Bool
 	var selectedAnswer string
+	var selectedMu sync.Mutex
 
 	userInputCallback := func(
 		_ context.Context,
 		req *codexsdk.UserInputRequest,
 	) (*codexsdk.UserInputResponse, error) {
 		callbackInvoked.Store(true)
+		selectedMu.Lock()
+		defer selectedMu.Unlock()
 
 		answers := make(map[string]*codexsdk.UserInputAnswer, len(req.Questions))
 
 		for _, q := range req.Questions {
-			t.Logf("User input question: %s (options: %d)", q.Question, len(q.Options))
+			t.Logf("User input question: %d (options: %d)", len(q.Question), len(q.Options))
 
 			if len(q.Options) > 0 {
 				selectedAnswer = q.Options[0].Label
-				t.Logf("Auto-selecting first option: %s", selectedAnswer)
+				t.Logf("Auto-selecting first option: %d", len(selectedAnswer))
 
 				answers[q.ID] = &codexsdk.UserInputAnswer{
 					Answers: []string{q.Options[0].Label},
@@ -58,12 +63,12 @@ func TestPlanMode_UserInputCallback(t *testing.T) {
 		_ map[string]any,
 		_ *codexsdk.ToolPermissionContext,
 	) (codexsdk.PermissionResult, error) {
-		t.Logf("Auto-allowing tool: %s", toolName)
+		t.Logf("Auto-allowing tool: %d", len(toolName))
 
 		return &codexsdk.PermissionResultAllow{Behavior: "allow"}, nil
 	}
 
-	client := codexsdk.NewClient()
+	client := newLiveClient()
 	defer client.Close()
 
 	err := client.Start(ctx,
@@ -72,21 +77,20 @@ func TestPlanMode_UserInputCallback(t *testing.T) {
 		codexsdk.WithPermissionMode("plan"),
 	)
 	if err != nil {
-		skipIfCLINotInstalled(t, err)
-		t.Fatalf("Start failed: %v", err)
+		t.Fatalf("Start failed: %v", safeLiveError(err))
 	}
 
 	err = client.Query(ctx,
 		`Use the request_user_input tool to ask me to choose between: Go, Rust, Python. `+
 			`Then tell me which one I selected.`)
-	require.NoError(t, err, "Query should succeed")
+	require.NoError(t, safeLiveError(err), "Query should succeed")
 
 	var gotResult bool
 	var assistantText string
 
 	for msg, err := range client.ReceiveMessages(ctx) {
 		if err != nil {
-			t.Logf("Receive error: %v", err)
+			t.Logf("Receive error: %v", safeLiveError(err))
 
 			break
 		}
@@ -95,7 +99,7 @@ func TestPlanMode_UserInputCallback(t *testing.T) {
 		case *codexsdk.AssistantMessage:
 			for _, block := range m.Content {
 				if tb, ok := block.(*codexsdk.TextBlock); ok {
-					t.Logf("Assistant: %s", tb.Text)
+					t.Logf("Assistant: %d", len(tb.Text))
 					assistantText += tb.Text
 				}
 			}
@@ -115,14 +119,18 @@ func TestPlanMode_UserInputCallback(t *testing.T) {
 
 	require.True(t, callbackInvoked.Load(), "User input callback should have been invoked")
 	require.True(t, gotResult, "Should receive a ResultMessage")
-	require.NotEmpty(t, selectedAnswer, "Should have selected an answer")
-	t.Logf("Selected answer: %s", selectedAnswer)
-	t.Logf("Full assistant text: %s", assistantText)
+	selectedMu.Lock()
+	selected := selectedAnswer
+	selectedMu.Unlock()
+	require.NotEmpty(t, selected, "Should have selected an answer")
+	t.Logf("Selected answer bytes: %d", len(selected))
+	t.Logf("Full assistant text: %d", len(assistantText))
 }
 
 // TestPlanMode_StartWithPrompt tests plan mode using StartWithPrompt for
 // a single-turn flow that triggers the user input callback.
 func TestPlanMode_StartWithPrompt(t *testing.T) {
+	requireLiveBackend(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -137,7 +145,7 @@ func TestPlanMode_StartWithPrompt(t *testing.T) {
 		answers := make(map[string]*codexsdk.UserInputAnswer, len(req.Questions))
 
 		for _, q := range req.Questions {
-			t.Logf("User input question: %s", q.Question)
+			t.Logf("User input question: %d", len(q.Question))
 
 			answer := "alpha"
 			if len(q.Options) > 0 {
@@ -161,7 +169,7 @@ func TestPlanMode_StartWithPrompt(t *testing.T) {
 		return &codexsdk.PermissionResultAllow{Behavior: "allow"}, nil
 	}
 
-	client := codexsdk.NewClient()
+	client := newLiveClient()
 	defer client.Close()
 
 	err := client.StartWithPrompt(ctx,
@@ -171,15 +179,14 @@ func TestPlanMode_StartWithPrompt(t *testing.T) {
 		codexsdk.WithPermissionMode("plan"),
 	)
 	if err != nil {
-		skipIfCLINotInstalled(t, err)
-		t.Fatalf("StartWithPrompt failed: %v", err)
+		t.Fatalf("StartWithPrompt failed: %v", safeLiveError(err))
 	}
 
 	var gotResult bool
 
 	for msg, err := range client.ReceiveMessages(ctx) {
 		if err != nil {
-			t.Logf("Receive error: %v", err)
+			t.Logf("Receive error: %v", safeLiveError(err))
 
 			break
 		}

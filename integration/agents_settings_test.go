@@ -16,17 +16,17 @@ import (
 
 // TestAgentsAndSettings_AgentDefinition tests custom agent configuration.
 func TestAgentsAndSettings_AgentDefinition(t *testing.T) {
+	requireLiveBackend(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	receivedResponse := false
 
-	for msg, err := range codexsdk.Query(ctx, "Say 'hello'",
-		codexsdk.WithPermissionMode("acceptAll"),
+	for msg, err := range liveQuery(ctx, "Say 'hello'",
+		codexsdk.WithPermissionMode("default"),
 	) {
 		if err != nil {
-			skipIfCLINotInstalled(t, err)
-			t.Fatalf("Query failed: %v", err)
+			t.Fatalf("Query failed: %v", safeLiveError(err))
 		}
 
 		switch m := msg.(type) {
@@ -43,17 +43,17 @@ func TestAgentsAndSettings_AgentDefinition(t *testing.T) {
 
 // TestAgentsAndSettings_SettingSources tests setting source loading.
 func TestAgentsAndSettings_SettingSources(t *testing.T) {
+	requireLiveBackend(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	receivedResult := false
 
-	for msg, err := range codexsdk.Query(ctx, "What is 2+2? Reply with just the number.",
-		codexsdk.WithPermissionMode("acceptAll"),
+	for msg, err := range liveQuery(ctx, "What is 2+2? Reply with just the number.",
+		codexsdk.WithPermissionMode("default"),
 	) {
 		if err != nil {
-			skipIfCLINotInstalled(t, err)
-			t.Fatalf("Query failed: %v", err)
+			t.Fatalf("Query failed: %v", safeLiveError(err))
 		}
 
 		if result, ok := msg.(*codexsdk.ResultMessage); ok {
@@ -67,17 +67,17 @@ func TestAgentsAndSettings_SettingSources(t *testing.T) {
 
 // TestAgentsAndSettings_NoSettingSources tests isolated environment without settings.
 func TestAgentsAndSettings_NoSettingSources(t *testing.T) {
+	requireLiveBackend(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	receivedResult := false
 
-	for msg, err := range codexsdk.Query(ctx, "Say 'isolated'",
-		codexsdk.WithPermissionMode("acceptAll"),
+	for msg, err := range liveQuery(ctx, "Say 'isolated'",
+		codexsdk.WithPermissionMode("default"),
 	) {
 		if err != nil {
-			skipIfCLINotInstalled(t, err)
-			t.Fatalf("Query failed: %v", err)
+			t.Fatalf("Query failed: %v", safeLiveError(err))
 		}
 
 		if result, ok := msg.(*codexsdk.ResultMessage); ok {
@@ -92,17 +92,18 @@ func TestAgentsAndSettings_NoSettingSources(t *testing.T) {
 // TestAgentsAndSettings_FilesystemAgentLoading tests that filesystem-based agents
 // load via setting_sources=["project"] and produce a full response cycle.
 func TestAgentsAndSettings_FilesystemAgentLoading(t *testing.T) {
+	requireLiveBackend(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	tmpDir, err := os.MkdirTemp("", "codex-sdk-test-*")
-	require.NoError(t, err)
+	require.NoError(t, safeLiveError(err))
 
 	defer os.RemoveAll(tmpDir)
 
 	agentsDir := filepath.Join(tmpDir, ".claude", "agents")
 	err = os.MkdirAll(agentsDir, 0755)
-	require.NoError(t, err)
+	require.NoError(t, safeLiveError(err))
 
 	agentFile := filepath.Join(agentsDir, "fs-test-agent.md")
 	agentContent := `---
@@ -116,7 +117,7 @@ tools: Read
 You are a simple test agent. When asked a question, provide a brief, helpful answer.
 `
 	err = os.WriteFile(agentFile, []byte(agentContent), 0644)
-	require.NoError(t, err)
+	require.NoError(t, safeLiveError(err))
 
 	var (
 		receivedSystem    bool
@@ -126,20 +127,19 @@ You are a simple test agent. When asked a question, provide a brief, helpful ans
 		foundAgent        bool
 	)
 
-	for msg, err := range codexsdk.Query(ctx, "Say hello in exactly 3 words",
+	for msg, err := range liveQuery(ctx, "Say hello in exactly 3 words",
 		codexsdk.WithCwd(tmpDir),
-		codexsdk.WithPermissionMode("acceptAll"),
+		codexsdk.WithPermissionMode("default"),
 	) {
 		if err != nil {
-			skipIfCLINotInstalled(t, err)
-			t.Fatalf("Query failed: %v", err)
+			t.Fatalf("Query failed: %v", safeLiveError(err))
 		}
 
 		switch m := msg.(type) {
 		case *codexsdk.SystemMessage:
 			receivedSystem = true
 
-			t.Logf("SystemMessage subtype=%s, data keys=%v", m.Subtype, mapKeys(m.Data))
+			t.Logf("SystemMessage data field count: %d", len(m.Data))
 
 			if m.Subtype == "init" {
 				receivedInit = true
@@ -163,7 +163,7 @@ You are a simple test agent. When asked a question, provide a brief, helpful ans
 					}
 
 					if !foundAgent {
-						t.Logf("Agents list (%d entries): %v", len(agents), agents)
+						t.Logf("Agents list entries: %d", len(agents))
 					}
 				}
 			}

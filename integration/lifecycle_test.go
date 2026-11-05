@@ -16,21 +16,21 @@ import (
 // TestQuery_CloseMidStream tests that closing the client mid-stream
 // during a real query terminates cleanly without hanging processes.
 func TestQuery_CloseMidStream(t *testing.T) {
+	requireLiveBackend(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	client := codexsdk.NewClient()
+	client := newLiveClient()
 
 	err := client.Start(ctx,
-		codexsdk.WithPermissionMode("acceptAll"),
+		codexsdk.WithPermissionMode("default"),
 	)
 	if err != nil {
-		skipIfCLINotInstalled(t, err)
-		t.Fatalf("Connect failed: %v", err)
+		t.Fatalf("Connect failed: %v", safeLiveError(err))
 	}
 
 	err = client.Query(ctx, "Write a short story about a robot. Include at least 3 paragraphs.")
-	require.NoError(t, err, "Query should succeed")
+	require.NoError(t, safeLiveError(err), "Query should succeed")
 
 	receiveDone := make(chan struct{})
 
@@ -43,7 +43,7 @@ func TestQuery_CloseMidStream(t *testing.T) {
 
 		for msg, err := range client.ReceiveMessages(ctx) {
 			if err != nil {
-				t.Logf("ReceiveMessages error: %v", err)
+				t.Logf("ReceiveMessages error: %v", safeLiveError(err))
 
 				return
 			}
@@ -70,7 +70,7 @@ func TestQuery_CloseMidStream(t *testing.T) {
 	err = client.Close()
 	closeDuration := time.Since(closeStart)
 
-	require.NoError(t, err, "Close should succeed")
+	require.NoError(t, safeLiveError(err), "Close should succeed")
 	t.Logf("Close completed in %v", closeDuration)
 
 	require.Less(t, closeDuration, 10*time.Second,
@@ -82,24 +82,24 @@ func TestQuery_CloseMidStream(t *testing.T) {
 // TestClient_ContextCancelDuringQuery tests that context cancellation
 // during an active query terminates cleanly.
 func TestClient_ContextCancelDuringQuery(t *testing.T) {
+	requireLiveBackend(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	client := codexsdk.NewClient()
+	client := newLiveClient()
 	defer client.Close()
 
 	err := client.Start(ctx,
-		codexsdk.WithPermissionMode("acceptAll"),
+		codexsdk.WithPermissionMode("default"),
 	)
 	if err != nil {
-		skipIfCLINotInstalled(t, err)
-		t.Fatalf("Connect failed: %v", err)
+		t.Fatalf("Connect failed: %v", safeLiveError(err))
 	}
 
 	queryCtx, queryCancel := context.WithCancel(ctx)
 
 	err = client.Query(queryCtx, "Explain quantum computing in detail.")
-	require.NoError(t, err, "Query should succeed")
+	require.NoError(t, safeLiveError(err), "Query should succeed")
 
 	receiveDone := make(chan struct{})
 
@@ -142,23 +142,23 @@ func TestClient_ContextCancelDuringQuery(t *testing.T) {
 
 // TestClient_RapidCloseReopen tests rapid close and reopen doesn't cause issues.
 func TestClient_RapidCloseReopen(t *testing.T) {
+	requireLiveBackend(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	for i := range 3 {
 		t.Run(fmt.Sprintf("iteration_%d", i), func(t *testing.T) {
-			client := codexsdk.NewClient()
+			client := newLiveClient()
 
 			err := client.Start(ctx,
-				codexsdk.WithPermissionMode("acceptAll"),
+				codexsdk.WithPermissionMode("default"),
 			)
 			if err != nil {
-				skipIfCLINotInstalled(t, err)
-				t.Fatalf("Connect failed: %v", err)
+				t.Fatalf("Connect failed: %v", safeLiveError(err))
 			}
 
 			err = client.Query(ctx, "Say 'hello'")
-			require.NoError(t, err)
+			require.NoError(t, safeLiveError(err))
 
 			for msg, err := range client.ReceiveMessages(ctx) {
 				if err != nil {
@@ -171,7 +171,7 @@ func TestClient_RapidCloseReopen(t *testing.T) {
 			}
 
 			err = client.Close()
-			require.NoError(t, err)
+			require.NoError(t, safeLiveError(err))
 		})
 	}
 }

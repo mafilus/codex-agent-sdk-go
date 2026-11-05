@@ -14,13 +14,14 @@ import (
 
 // TestStructuredOutput_JSONSchema tests OutputFormat produces valid JSON.
 func TestStructuredOutput_JSONSchema(t *testing.T) {
+	requireLiveBackend(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	var receivedResponse bool
 
-	for msg, err := range codexsdk.Query(ctx, "What is 2+2? Provide structured output.",
-		codexsdk.WithPermissionMode("acceptAll"),
+	for msg, err := range liveQuery(ctx, "What is 2+2? Provide structured output.",
+		codexsdk.WithPermissionMode("default"),
 		codexsdk.WithOutputFormat(map[string]any{
 			"type": "json_schema",
 			"schema": map[string]any{
@@ -41,15 +42,14 @@ func TestStructuredOutput_JSONSchema(t *testing.T) {
 		}),
 	) {
 		if err != nil {
-			skipIfCLINotInstalled(t, err)
-			t.Fatalf("Query failed: %v", err)
+			t.Fatalf("Query failed: %v", safeLiveError(err))
 		}
 
 		switch m := msg.(type) {
 		case *codexsdk.AssistantMessage:
 			for _, block := range m.Content {
 				if textBlock, ok := block.(*codexsdk.TextBlock); ok {
-					t.Logf("Structured output (assistant): %s", textBlock.Text)
+					t.Logf("Structured output (assistant): %d", len(textBlock.Text))
 					receivedResponse = true
 				}
 			}
@@ -57,7 +57,7 @@ func TestStructuredOutput_JSONSchema(t *testing.T) {
 			require.False(t, m.IsError, "Query should not result in error")
 
 			if m.Result != nil && *m.Result != "" {
-				t.Logf("Structured output (result): %s", *m.Result)
+				t.Logf("Structured output (result): %d", len(*m.Result))
 				receivedResponse = true
 			}
 		}
@@ -68,14 +68,15 @@ func TestStructuredOutput_JSONSchema(t *testing.T) {
 
 // TestStructuredOutput_RequiredFields tests required fields are present in output.
 func TestStructuredOutput_RequiredFields(t *testing.T) {
+	requireLiveBackend(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	var receivedResponse bool
 
-	for msg, err := range codexsdk.Query(ctx,
+	for msg, err := range liveQuery(ctx,
 		"Generate a fictional person with a name and age in structured format.",
-		codexsdk.WithPermissionMode("acceptAll"),
+		codexsdk.WithPermissionMode("default"),
 		codexsdk.WithOutputFormat(map[string]any{
 			"type": "json_schema",
 			"schema": map[string]any{
@@ -94,15 +95,14 @@ func TestStructuredOutput_RequiredFields(t *testing.T) {
 		}),
 	) {
 		if err != nil {
-			skipIfCLINotInstalled(t, err)
-			t.Fatalf("Query failed: %v", err)
+			t.Fatalf("Query failed: %v", safeLiveError(err))
 		}
 
 		switch m := msg.(type) {
 		case *codexsdk.AssistantMessage:
 			for _, block := range m.Content {
 				if textBlock, ok := block.(*codexsdk.TextBlock); ok {
-					t.Logf("Output with required fields (assistant): %s", textBlock.Text)
+					t.Logf("Output with required fields (assistant): %d", len(textBlock.Text))
 					receivedResponse = true
 				}
 			}
@@ -110,7 +110,7 @@ func TestStructuredOutput_RequiredFields(t *testing.T) {
 			require.False(t, m.IsError, "Query should not result in error")
 
 			if m.Result != nil && *m.Result != "" {
-				t.Logf("Output with required fields (result): %s", *m.Result)
+				t.Logf("Output with required fields (result): %d", len(*m.Result))
 				receivedResponse = true
 			}
 		}
@@ -121,14 +121,15 @@ func TestStructuredOutput_RequiredFields(t *testing.T) {
 
 // TestStructuredOutput_WithEnum tests structured output with enum type.
 func TestStructuredOutput_WithEnum(t *testing.T) {
+	requireLiveBackend(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	var receivedResponse bool
 
-	for msg, err := range codexsdk.Query(ctx,
+	for msg, err := range liveQuery(ctx,
 		"Pick a random color and intensity. Respond in structured format.",
-		codexsdk.WithPermissionMode("acceptAll"),
+		codexsdk.WithPermissionMode("default"),
 		codexsdk.WithOutputFormat(map[string]any{
 			"type": "json_schema",
 			"schema": map[string]any{
@@ -151,15 +152,14 @@ func TestStructuredOutput_WithEnum(t *testing.T) {
 		}),
 	) {
 		if err != nil {
-			skipIfCLINotInstalled(t, err)
-			t.Fatalf("Query failed: %v", err)
+			t.Fatalf("Query failed: %v", safeLiveError(err))
 		}
 
 		switch m := msg.(type) {
 		case *codexsdk.AssistantMessage:
 			for _, block := range m.Content {
 				if textBlock, ok := block.(*codexsdk.TextBlock); ok {
-					t.Logf("Structured output with enum (assistant): %s", textBlock.Text)
+					t.Logf("Structured output with enum (assistant): %d", len(textBlock.Text))
 					receivedResponse = true
 				}
 			}
@@ -167,7 +167,7 @@ func TestStructuredOutput_WithEnum(t *testing.T) {
 			require.False(t, m.IsError, "Query should not result in error")
 
 			if m.Result != nil && *m.Result != "" {
-				t.Logf("Structured output with enum (result): %s", *m.Result)
+				t.Logf("Structured output with enum (result): %d", len(*m.Result))
 				receivedResponse = true
 			}
 		}

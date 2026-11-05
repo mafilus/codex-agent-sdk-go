@@ -452,6 +452,40 @@ func TestAppServerAdapter_SetModelAndPermissionOverrides(t *testing.T) {
 	require.Equal(t, "dangerFullAccess", sandboxPolicy["type"])
 }
 
+func TestAppServerAdapter_AskAllPreservesReadOnlyThreadSandbox(t *testing.T) {
+	mock := newMockAppServerRPC()
+	adapter := newTestAdapter(mock)
+	t.Cleanup(func() { require.NoError(t, adapter.Close()) })
+
+	sendControlRequest(t, adapter, mock, "initialize", map[string]any{
+		"sandbox":        "read-only",
+		"approvalPolicy": "on-request",
+	})
+	_ = receiveAdapterMessage(t, adapter)
+
+	sendControlRequest(t, adapter, mock, "set_permission_mode", map[string]any{
+		"mode": "askAll",
+	})
+	_ = receiveAdapterMessage(t, adapter)
+
+	err := adapter.SendMessage(t.Context(), []byte(`{"type":"user","message":{"role":"user","content":"permission changed"}}`))
+	require.NoError(t, err)
+
+	calls := mock.getSentRequests()
+	require.Len(t, calls, 2)
+	require.Equal(t, "thread/start", calls[0].Method)
+	thread, ok := calls[0].Params.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "read-only", thread["sandbox"])
+
+	require.Equal(t, "turn/start", calls[1].Method)
+	turn, ok := calls[1].Params.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "t1", turn["threadId"])
+	require.Equal(t, "untrusted", turn["approvalPolicy"])
+	require.NotContains(t, turn, "sandboxPolicy", "the turn must retain its thread sandbox")
+}
+
 func TestAppServerAdapter_ControlRequests_MCPStatusAndUnsupported(t *testing.T) {
 	t.Run("mcp_status", func(t *testing.T) {
 		mock := newMockAppServerRPC()

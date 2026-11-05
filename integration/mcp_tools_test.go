@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 
 // TestMCPTools_Registration tests tool registration with the MCP server.
 func TestMCPTools_Registration(t *testing.T) {
+	requireLiveBackend(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
@@ -39,15 +41,14 @@ func TestMCPTools_Registration(t *testing.T) {
 	server := codexsdk.CreateSdkMcpServer("sdk", "1.0.0", echoTool)
 	receivedResult := false
 
-	for msg, err := range codexsdk.Query(ctx, "Say hello",
-		codexsdk.WithPermissionMode("bypassPermissions"),
+	for msg, err := range liveQuery(ctx, "Say hello",
+		codexsdk.WithPermissionMode("default"),
 		codexsdk.WithMCPServers(map[string]codexsdk.MCPServerConfig{
 			"sdk": server,
 		}),
 	) {
 		if err != nil {
-			skipIfCLINotInstalled(t, err)
-			t.Fatalf("Query failed: %v", err)
+			t.Fatalf("Query failed: %v", safeLiveError(err))
 		}
 
 		if result, ok := msg.(*codexsdk.ResultMessage); ok {
@@ -61,6 +62,7 @@ func TestMCPTools_Registration(t *testing.T) {
 
 // TestSDKTools_Registration tests high-level Tool registration with WithSDKTools.
 func TestSDKTools_Registration(t *testing.T) {
+	requireLiveBackend(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
@@ -88,13 +90,12 @@ func TestSDKTools_Registration(t *testing.T) {
 
 	receivedResult := false
 
-	for msg, err := range codexsdk.Query(ctx, "Say hello",
-		codexsdk.WithPermissionMode("bypassPermissions"),
+	for msg, err := range liveQuery(ctx, "Say hello",
+		codexsdk.WithPermissionMode("default"),
 		codexsdk.WithSDKTools(echoTool),
 	) {
 		if err != nil {
-			skipIfCLINotInstalled(t, err)
-			t.Fatalf("Query failed: %v", err)
+			t.Fatalf("Query failed: %v", safeLiveError(err))
 		}
 
 		if result, ok := msg.(*codexsdk.ResultMessage); ok {
@@ -108,11 +109,12 @@ func TestSDKTools_Registration(t *testing.T) {
 
 // TestSDKTools_Execution tests high-level Tool called with correct input.
 func TestSDKTools_Execution(t *testing.T) {
+	requireLiveBackend(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	var toolExecuted bool
-	var receivedInput string
+	var toolExecuted atomic.Bool
+	var receivedInput atomic.Value
 
 	calculatorTool := codexsdk.NewTool(
 		"add_numbers",
@@ -132,10 +134,10 @@ func TestSDKTools_Execution(t *testing.T) {
 			"required": []string{"a", "b"},
 		},
 		func(_ context.Context, input map[string]any) (map[string]any, error) {
-			toolExecuted = true
+			toolExecuted.Store(true)
 			a, _ := input["a"].(float64)
 			b, _ := input["b"].(float64)
-			receivedInput = fmt.Sprintf("a=%g, b=%g", a, b)
+			receivedInput.Store(fmt.Sprintf("a=%g, b=%g", a, b))
 			t.Logf("Tool executed with a=%v, b=%v", a, b)
 
 			return map[string]any{
@@ -144,27 +146,27 @@ func TestSDKTools_Execution(t *testing.T) {
 		},
 	)
 
-	for _, err := range codexsdk.Query(ctx,
+	for _, err := range liveQuery(ctx,
 		"Use the add_numbers tool to add 5 and 3",
-		codexsdk.WithPermissionMode("bypassPermissions"),
+		codexsdk.WithPermissionMode("default"),
 		codexsdk.WithSDKTools(calculatorTool),
 	) {
 		if err != nil {
-			skipIfCLINotInstalled(t, err)
-			t.Fatalf("Query failed: %v", err)
+			t.Fatalf("Query failed: %v", safeLiveError(err))
 		}
 	}
 
-	require.True(t, toolExecuted, "Tool should have been executed")
-	t.Logf("Received input: %s", receivedInput)
+	require.True(t, toolExecuted.Load(), "Tool should have been executed")
+	t.Logf("Received input recorded: %t", receivedInput.Load() != nil)
 }
 
 // TestSDKTools_ReturnValue tests high-level Tool result used by the agent.
 func TestSDKTools_ReturnValue(t *testing.T) {
+	requireLiveBackend(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	var toolExecuted bool
+	var toolExecuted atomic.Bool
 	expectedResult := 42.0
 
 	magicTool := codexsdk.NewTool(
@@ -175,7 +177,7 @@ func TestSDKTools_ReturnValue(t *testing.T) {
 			"properties": map[string]any{},
 		},
 		func(_ context.Context, _ map[string]any) (map[string]any, error) {
-			toolExecuted = true
+			toolExecuted.Store(true)
 
 			return map[string]any{
 				"number": expectedResult,
@@ -185,20 +187,19 @@ func TestSDKTools_ReturnValue(t *testing.T) {
 
 	var mentionedNumber bool
 
-	for msg, err := range codexsdk.Query(ctx,
+	for msg, err := range liveQuery(ctx,
 		"Use the get_magic_number tool and tell me what number it returns",
-		codexsdk.WithPermissionMode("bypassPermissions"),
+		codexsdk.WithPermissionMode("default"),
 		codexsdk.WithSDKTools(magicTool),
 	) {
 		if err != nil {
-			skipIfCLINotInstalled(t, err)
-			t.Fatalf("Query failed: %v", err)
+			t.Fatalf("Query failed: %v", safeLiveError(err))
 		}
 
 		if assistantMsg, ok := msg.(*codexsdk.AssistantMessage); ok {
 			for _, block := range assistantMsg.Content {
 				if textBlock, ok := block.(*codexsdk.TextBlock); ok {
-					t.Logf("Response: %s", textBlock.Text)
+					t.Logf("Response: %d", len(textBlock.Text))
 
 					if contains42(textBlock.Text) {
 						mentionedNumber = true
@@ -208,6 +209,6 @@ func TestSDKTools_ReturnValue(t *testing.T) {
 		}
 	}
 
-	require.True(t, toolExecuted, "Tool should have been executed")
+	require.True(t, toolExecuted.Load(), "Tool should have been executed")
 	require.True(t, mentionedNumber, "Agent should mention the returned number (42)")
 }

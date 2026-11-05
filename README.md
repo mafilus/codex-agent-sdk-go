@@ -419,3 +419,84 @@ go test -race ./...
 go test -tags=integration ./... # requires Codex CLI + working runtime environment
 golangci-lint run
 ```
+
+### Opt-in live backend tests
+
+Status (2026-11-05): live qualification and independent final review passed
+for the tested Linux configuration (`PASS_GEL_BORNE`). The integrated Linux
+harness passed all eight live scenarios (including both denied-tool cases), all
+22 legacy integration tests, and its offline checks with the race detector:
+50 tests and subtests passed, with no failures or skips. The campaign used Codex
+CLI 0.166.0 and `gpt-5.6-luna`, with the checkout mounted read-only and the personal
+home hidden. Reasoning effort was not overridden or independently observed.
+Both lint configurations passed. The independent review verified the candidate
+and received execution evidence; it did not rerun the live tests. Qualification
+is limited to this tested Linux configuration.
+
+Live tests require an explicitly supplied ChatGPT `auth.json` outside the
+checkout and an explicitly chosen model accessible to that account. They consume
+the account's Codex allowance; a model API key is not required.
+
+```bash
+CODEX_SDK_LIVE_AUTH_FILE=/private/path/auth.json \
+CODEX_SDK_LIVE_MODEL=your-accessible-model \
+go test -tags=integration -count=1 -race -timeout=20m -json ./integration/...
+```
+
+Use an installed native Linux Codex CLI in `PATH`. The harness rejects script
+fixtures, records the CLI version and binary SHA-256, and pins the resolved
+executable for each test. This identifies the selected binary; it does not
+verify a publisher signature. For the eight release scenarios alone, add
+`-run '^TestLiveBackendS0[1-8]'`. Other existing integration tests remain gated
+and are reported separately.
+
+| Condition | Outcome |
+|---|---|
+| `CODEX_SDK_LIVE_AUTH_FILE` absent | Live tests skip before credential access or CLI startup |
+| Variable present but empty, or model missing | Fail |
+| Auth file missing, invalid, inside the checkout, or not ChatGPT credentials | Fail |
+| CLI missing, script fixture selected, or platform unsupported | Fail |
+| Authentication, model, quota, network, timeout or assertion failure | Fail, never converted to skip |
+
+Tests use private temporary working and Codex home directories, a private copy
+of the supplied credentials, an OpenAI-only configuration, and an explicit
+read-only sandbox. Inherited API keys, provider overrides and proxy settings are
+removed for the test process and restored afterwards. Tests are sequential;
+`t.Parallel` is incompatible with their process-wide environment isolation.
+
+The source auth file is checked for changes and is never rewritten. A working
+copy still represents the same remote credentials: a CLI token refresh can
+affect the account session even though the source file stays unchanged. Repeated
+refresh behavior has not been qualified. Do not put credentials in the checkout,
+logs or public CI secrets. Backend errors and stderr contents are withheld from
+test diagnostics rather than copied into artifacts.
+
+Public CI is configured to run the harness checks and integration suite with both opt-in
+variables explicitly removed. It requires no Codex account and produces skips
+for the live scenarios. Verify this locally with:
+
+```bash
+env -u CODEX_SDK_LIVE_AUTH_FILE -u CODEX_SDK_LIVE_MODEL \
+  go test -tags=integration -count=1 -race -timeout=2m ./integration/...
+```
+
+The release scenarios cover exec, app-server, streaming input, two turns in a
+persistent client, actual SDK and embedded MCP tool execution, cancellation and
+bounded cleanup, and denied tools whose handlers must not execute. Registration
+or a text event alone does not satisfy a successful turn. Existing legacy tests
+retain their assertions, use the same opt-in and model, and no longer request a
+global permission bypass. The permission-mode test switches to `askAll`, changing
+approval behavior while retaining the thread's read-only sandbox. The model-setting
+test reapplies the explicitly chosen model rather than switching to a hard-coded
+model.
+
+A live qualification requires all eight scenarios, including both denied-tool
+cases, to execute and pass on an identified candidate. A successful command with
+skipped or unselected scenarios is not full qualification. Record the source
+commit/diff, CLI and Go versions, requested and observed model information,
+commands, exit codes, per-scenario outcomes and sanitized artifact hashes.
+Offline synthetic-CLI results remain a separate level of evidence.
+
+Sources: [Codex authentication](https://developers.openai.com/codex/auth),
+[configuration reference](https://developers.openai.com/codex/config-reference)
+and [account authentication in CI](https://developers.openai.com/codex/noninteractive).

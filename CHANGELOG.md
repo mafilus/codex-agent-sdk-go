@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add explicit opt-in live tests using an externally supplied ChatGPT auth file
+  and model; skip all live integration tests when credentials are not supplied.
+- Add isolated Linux live scenarios for both query backends, streaming, multi-turn
+  clients, SDK/MCP tools, cancellation and denied tools, plus offline gate checks.
+- Run the integration opt-in boundary checks without credentials in public CI.
+- Preserve the read-only sandbox when the live permission-mode test switches to
+  `askAll`, with an offline regression check of the emitted RPC options.
+
 - Remove the unused app-server mode from the exec-only `CLITransport`.
 - Share transport/controller/session startup and cleanup across `Query`,
   `QueryStream` and `Client`, preserving their backend and completion rules.
